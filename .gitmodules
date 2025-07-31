@@ -1,0 +1,3 @@
+[submodule "testdata/yaml-test-suite"]
+	path = testdata/yaml-test-suite
+	url = https://github.com/yaml/yaml-test-suite
