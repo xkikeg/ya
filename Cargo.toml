@@ -3,8 +3,13 @@ name = "ya"
 authors = ["kikeg"]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.56.0"
+rust-version = "1.65.0"
 license = "Apache-2.0"
 description = "Yet Another YAML parser in pure Rust"
 
 [dependencies]
+serde = "1.0.219"
+winnow = { version = "0.7.12", features = ["simd"] }
+
+[dev-dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
