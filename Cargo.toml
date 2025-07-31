@@ -1,0 +1,19 @@
+[package]
+name = "ya"
+authors = ["kikeg"]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70.0"
+license = "Apache-2.0"
+description = "Yet Another YAML parser in pure Rust"
+
+[dependencies]
+winnow = { version = "0.7.12", features = ["simd"] }
+
+[dev-dependencies]
+criterion = "0.7.0"
+rstest = "0.26.1"
+
+[[bench]]
+name = "benchmark"
+harness = false
