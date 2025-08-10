@@ -17,3 +17,12 @@ mod tests {
         assert_eq!(result, 4);
     }
 }
+
+#[cfg(test)]
+#[ctor::ctor]
+fn unit_test_logger() {
+    let _ = env_logger::builder()
+        .is_test(true)
+        .filter_level(log::LevelFilter::max())
+        .try_init();
+}

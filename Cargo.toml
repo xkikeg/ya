@@ -8,8 +8,11 @@ license = "Apache-2.0"
 description = "Yet Another YAML parser in pure Rust"
 
 [dependencies]
+log = "0.4.27"
 serde = "1.0.219"
 winnow = { version = "0.7.12", features = ["simd"] }
 
 [dev-dependencies]
+ctor = "0.4.3"
+env_logger = "0.10.2"
 serde = { version = "1.0.219", features = ["derive"] }

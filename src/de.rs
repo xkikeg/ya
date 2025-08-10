@@ -169,6 +169,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_bool");
         visitor.visit_bool(self.parse_bool()?)
     }
 
@@ -178,6 +179,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_i8");
         visitor.visit_i8(self.parse_signed()?)
     }
 
@@ -185,6 +187,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_i16");
         visitor.visit_i16(self.parse_signed()?)
     }
 
@@ -192,6 +195,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_i32");
         visitor.visit_i32(self.parse_signed()?)
     }
 
@@ -199,6 +203,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_i64");
         visitor.visit_i64(self.parse_signed()?)
     }
 
@@ -206,6 +211,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_u8");
         visitor.visit_u8(self.parse_unsigned()?)
     }
 
@@ -213,6 +219,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_u16");
         visitor.visit_u16(self.parse_unsigned()?)
     }
 
@@ -220,6 +227,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_u32");
         visitor.visit_u32(self.parse_unsigned()?)
     }
 
@@ -227,6 +235,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_u64");
         visitor.visit_u64(self.parse_unsigned()?)
     }
 
@@ -262,6 +271,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_str");
         visitor.visit_borrowed_str(self.parse_string()?)
     }
 
@@ -269,6 +279,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_string");
         self.deserialize_str(visitor)
     }
 
@@ -300,6 +311,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_option");
         if self.input.starts_with("null") {
             self.input = &self.input["null".len()..];
             visitor.visit_none()
@@ -313,6 +325,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_unit");
         if self.input.starts_with("null") {
             self.input = &self.input["null".len()..];
             visitor.visit_unit()
@@ -326,6 +339,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_unit_struct");
         self.deserialize_unit(visitor)
     }
 
@@ -336,6 +350,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_newtype_struct");
         visitor.visit_newtype_struct(self)
     }
 
@@ -346,6 +361,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_seq");
         // Parse the opening bracket of the sequence.
         if self.next_char()? == '[' {
             // Give the visitor access to each element of the sequence.
@@ -371,6 +387,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_tuple");
         self.deserialize_seq(visitor)
     }
 
@@ -384,6 +401,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_tuple_struct");
         self.deserialize_seq(visitor)
     }
 
@@ -394,6 +412,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_map");
         // Parse the opening brace of the map.
         if self.next_char()? == '{' {
             // Give the visitor access to each entry of the map.
@@ -424,6 +443,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_struct");
         self.deserialize_map(visitor)
     }
 
@@ -436,6 +456,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_enum");
         if self.peek_char()? == '"' {
             // Visit a unit variant.
             visitor.visit_enum(self.parse_string()?.into_deserializer())
@@ -461,6 +482,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_identifier");
         self.deserialize_str(visitor)
     }
 
@@ -479,6 +501,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        log::info!("deserialize_ignored_any");
         self.deserialize_any(visitor)
     }
 }
@@ -644,7 +667,8 @@ mod tests {
             seq: Vec<String>,
         }
 
-        let j = r#"{"int":1,"seq":["a","b"]}"#;
+        log::info!("test_struct");
+        let j = r#"{"seq":["a","b"],"int":1}"#;
         let expected = Test {
             int: 1,
             seq: vec!["a".to_owned(), "b".to_owned()],
@@ -662,18 +686,22 @@ mod tests {
             Struct { a: u32 },
         }
 
+        log::info!("test_enum_unit");
         let j = r#""Unit""#;
         let expected = E::Unit;
         assert_eq!(expected, from_str(j).unwrap());
 
+        log::info!("test_enum_newtype");
         let j = r#"{"Newtype":1}"#;
         let expected = E::Newtype(1);
         assert_eq!(expected, from_str(j).unwrap());
 
+        log::info!("test_enum_tuple");
         let j = r#"{"Tuple":[1,2]}"#;
         let expected = E::Tuple(1, 2);
         assert_eq!(expected, from_str(j).unwrap());
 
+        log::info!("test_enum_struct");
         let j = r#"{"Struct":{"a":1}}"#;
         let expected = E::Struct { a: 1 };
         assert_eq!(expected, from_str(j).unwrap());
