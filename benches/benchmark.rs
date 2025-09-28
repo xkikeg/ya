@@ -18,7 +18,7 @@ fn parse_benchmark(c: &mut Criterion) {
     }
     input.push(']');
     c.bench_function("parse", |b| {
-        b.iter(|| -> Vec<ya::value::Value<'_>> {
+        b.iter(|| -> Vec<ya::value::Node<'_>> {
             black_box(
                 flow_sequence::<_, _, ContextError>(FlowIn, IndentLevel::initial())
                     .parse(Input::new(&input))

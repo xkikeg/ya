@@ -11,7 +11,7 @@ use crate::{
         input::InputStream,
         spaces::{self, IndentLevel},
     },
-    value::{MapEntry, Mapping, Value},
+    value::{Content, MapEntry, Mapping, Node},
 };
 
 use super::node::{flow_json_node, flow_node, flow_yaml_node};
@@ -117,8 +117,8 @@ where
         alt((
             flow_map_implicit_entry(context, indent_level),
             empty.value(MapEntry {
-                key: Value::Empty,
-                value: Value::Empty,
+                key: Node::unspecified(Content::Empty),
+                value: Node::unspecified(Content::Empty),
             }),
         )),
     )
@@ -168,7 +168,7 @@ where
                 opt(spaces::separate(context, indent_level)),
                 flow_map_separate_value(context, indent_level),
             ))
-            .map(|x| x.unwrap_or(Value::Empty)),
+            .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
         )
             .map(MapEntry::from_tuple),
     )
@@ -190,7 +190,7 @@ where
     trace(
         "flow::map::flow_map_empty_key_entry",
         flow_map_separate_value(context, indent_level).map(|value| MapEntry {
-            key: Value::Empty,
+            key: Node::unspecified(Content::Empty),
             value,
         }),
     )
@@ -203,7 +203,7 @@ where
 pub fn flow_map_separate_value<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: InFlow,
     Input: InputStream<'i>,
@@ -221,7 +221,7 @@ where
                 flow_node(context, indent_level),
             )),
         )
-        .map(|x| x.unwrap_or(Value::Empty)),
+        .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
     )
 }
 
@@ -246,7 +246,7 @@ where
                 opt(spaces::separate(context, indent_level)),
                 flow_map_adjacent_value(context, indent_level),
             ))
-            .map(|x| x.unwrap_or(Value::Empty)),
+            .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
         )
             .map(MapEntry::from_tuple),
     )
@@ -259,7 +259,7 @@ where
 pub fn flow_map_adjacent_value<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: InFlow,
     Input: InputStream<'i>,
@@ -274,6 +274,6 @@ where
                 flow_node(context, indent_level),
             )),
         )
-        .map(|x| x.unwrap_or(Value::Empty)),
+        .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
     )
 }

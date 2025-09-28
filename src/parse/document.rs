@@ -180,7 +180,7 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::parse::testing;
-    use crate::value::Value;
+    use crate::value::{Content, Node};
 
     #[test]
     fn simple_flow_seq() {
@@ -188,11 +188,19 @@ mod tests {
         assert_eq!(
             (
                 "",
-                value::Stream(vec![value::Document(Value::Seq(vec![
-                    Value::Scalar(value::Scalar::Str(Cow::Borrowed("foo"))),
-                    Value::Scalar(value::Scalar::Str(Cow::Borrowed("bar"))),
-                    Value::Scalar(value::Scalar::Str(Cow::Borrowed("baz"))),
-                ]))])
+                value::Stream(vec![value::Document(Node::unspecified(Content::Seq(
+                    vec![
+                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
+                            "foo"
+                        )))),
+                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
+                            "bar"
+                        )))),
+                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
+                            "baz"
+                        )))),
+                    ]
+                )))])
             ),
             testing::parse(yaml_stream, input).unwrap()
         );
@@ -204,12 +212,16 @@ mod tests {
         assert_eq!(
             (
                 "",
-                value::Stream(vec![value::Document(Value::Map(value::Mapping(vec![
-                    value::MapEntry {
-                        key: Value::Scalar(value::Scalar::Str(Cow::Borrowed("foo"))),
-                        value: Value::Scalar(value::Scalar::Str(Cow::Borrowed("bar"))),
-                    }
-                ])))])
+                value::Stream(vec![value::Document(Node::unspecified(Content::Map(
+                    value::Mapping(vec![value::MapEntry {
+                        key: Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
+                            "foo"
+                        )))),
+                        value: Node::unspecified(Content::Scalar(value::Scalar::Str(
+                            Cow::Borrowed("bar")
+                        ))),
+                    }])
+                )))])
             ),
             testing::parse(yaml_stream, input).unwrap()
         );

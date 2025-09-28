@@ -13,7 +13,7 @@ use crate::{
         input::InputStream,
         spaces::{self, IndentLevel},
     },
-    value::Value,
+    value::Content,
 };
 
 /// Block sequence.
@@ -22,7 +22,7 @@ use crate::{
 #[doc(alias = "l+block-sequence")]
 pub fn block_sequence<'i, Input, Error>(
     indent_level: IndentLevel,
-) -> impl Parser<Input, Vec<Value<'i>>, Error>
+) -> impl Parser<Input, Vec<Content<'i>>, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -44,7 +44,7 @@ where
 #[doc(alias = "c-l-block-seq-entry")]
 pub fn block_seq_entry<'i, Input, Error>(
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Content<'i>, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
