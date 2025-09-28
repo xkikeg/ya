@@ -4,7 +4,7 @@ use winnow::{
     Parser,
 };
 
-use crate::value::Value;
+use crate::value::Node;
 
 use super::{chars, error::ParserError, input::InputStream};
 
@@ -12,7 +12,7 @@ use super::{chars, error::ParserError, input::InputStream};
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-ns-alias-node
 #[doc(alias = "c-ns-alias-node")]
-pub fn alias_node<'i, Input, Error>(input: &mut Input) -> winnow::Result<Value<'i>, Error>
+pub fn alias_node<'i, Input, Error>(input: &mut Input) -> winnow::Result<Node<'i>, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -52,7 +52,7 @@ mod tests {
             input::{Input, WithAnchorStore},
             testing,
         },
-        value::Scalar,
+        value::{Content, Scalar},
     };
 
     #[test]
@@ -60,11 +60,14 @@ mod tests {
         let mut input = Input::new("*foo");
         input.anchor_store_mut().put(
             "foo".to_string(),
-            Value::Scalar(Scalar::Str(Cow::Borrowed("value"))),
+            Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value")))),
         );
 
         assert_eq!(
-            ("", Value::Scalar(Scalar::Str(Cow::Borrowed("value")))),
+            (
+                "",
+                Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value"))))
+            ),
             testing::parse_with_input(alias_node, input).unwrap()
         );
     }
@@ -74,15 +77,21 @@ mod tests {
         let mut input = Input::new("*foo");
         input.anchor_store_mut().put(
             "bar".to_string(),
-            Value::Scalar(Scalar::Str(Cow::Borrowed("value"))),
+            Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value")))),
         );
 
         testing::parse_with_input(alias_node, input.clone()).unwrap_err();
 
         assert_eq!(
-            ("foo", Value::Empty),
-            testing::parse_with_input(alt((alias_node, one_of('*').value(Value::Empty))), input)
-                .unwrap()
+            ("foo", Node::unspecified(Content::Empty)),
+            testing::parse_with_input(
+                alt((
+                    alias_node,
+                    one_of('*').value(Node::unspecified(Content::Empty))
+                )),
+                input
+            )
+            .unwrap()
         )
     }
 }

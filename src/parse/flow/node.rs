@@ -5,7 +5,7 @@ use crate::parse::{
     alias::alias_node, context::FlowOrKey, error::ParserError, flow::content::flow_content,
     input::InputStream, spaces::IndentLevel,
 };
-use crate::value::Value;
+use crate::value::Node;
 
 use super::content::{flow_json_content, flow_yaml_content};
 
@@ -16,7 +16,7 @@ use super::content::{flow_json_content, flow_yaml_content};
 pub fn flow_node<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -26,7 +26,7 @@ where
         "flow::node::flow_node",
         alt((
             alias_node,
-            flow_content(context, indent_level),
+            flow_content(context, indent_level).map(|v| Node::unspecified(v)),
             // TODO: fixme Support properties.
         )),
     )
@@ -39,7 +39,7 @@ where
 pub fn flow_yaml_node<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -49,7 +49,7 @@ where
         "flow::node::flow_yaml_node",
         alt((
             alias_node,
-            flow_yaml_content(context, indent_level),
+            flow_yaml_content(context, indent_level).map(Node::unspecified),
             // TODO: fixme Support properties.
         )),
     )
@@ -62,7 +62,7 @@ where
 pub fn flow_json_node<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -71,6 +71,6 @@ where
     trace(
         "flow::node::flow_json_node",
         // TODO: fixme Support properties.
-        flow_json_content(context, indent_level),
+        flow_json_content(context, indent_level).map(Node::unspecified),
     )
 }

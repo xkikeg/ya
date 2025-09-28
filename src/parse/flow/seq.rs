@@ -11,7 +11,7 @@ use crate::{
         input::InputStream,
         spaces::{self, IndentLevel},
     },
-    value::{Mapping, Value},
+    value::{Content, Mapping, Node},
 };
 
 /// Flow sequence.
@@ -21,7 +21,7 @@ use crate::{
 pub fn flow_sequence<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Vec<Value<'i>>, Error>
+) -> impl Parser<Input, Vec<Node<'i>>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -44,7 +44,7 @@ where
 pub fn flow_seq_entries<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Vec<Value<'i>>, Error>
+) -> impl Parser<Input, Vec<Node<'i>>, Error>
 where
     Context: InFlow,
     Input: InputStream<'i>,
@@ -79,7 +79,7 @@ where
 pub fn flow_seq_entry<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: InFlow,
     Input: InputStream<'i>,
@@ -88,7 +88,8 @@ where
     trace(
         "flow::seq::flow_seq_entry",
         alt((
-            super::pair::flow_pair(context, indent_level).map(|e| Value::Map(Mapping(vec![e]))),
+            super::pair::flow_pair(context, indent_level)
+                .map(|e| Node::unspecified(Content::Map(Mapping(vec![e])))),
             super::node::flow_node(context, indent_level),
         )),
     )

@@ -11,7 +11,7 @@ use crate::{
         input::InputStream,
         spaces::{self, IndentLevel},
     },
-    value::Value,
+    value::{Content, Node},
 };
 
 /// Block node.
@@ -21,7 +21,7 @@ use crate::{
 pub fn block_node<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: InOutBlock,
     Input: InputStream<'i>,
@@ -43,7 +43,7 @@ where
 pub fn block_in_block<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: InOutBlock,
     Input: InputStream<'i>,
@@ -59,7 +59,7 @@ where
 #[doc(alias = "s-l+flow-in-block")]
 pub fn flow_in_block<'i, Input, Error>(
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -81,7 +81,7 @@ where
 pub fn block_indented<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Content<'i>, Error>
 where
     Context: InOutBlock,
     Input: InputStream<'i>,

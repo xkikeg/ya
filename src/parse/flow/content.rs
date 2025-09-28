@@ -14,7 +14,7 @@ use crate::{
         scalar::single_quoted,
         spaces::IndentLevel,
     },
-    value::{Scalar, Value},
+    value::{Content, Scalar},
 };
 
 /// Flow content.
@@ -24,7 +24,7 @@ use crate::{
 pub fn flow_content<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Content<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -46,7 +46,7 @@ where
 pub fn flow_yaml_content<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Content<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -54,7 +54,7 @@ where
 {
     trace(
         "flow::content::flow_yaml_content",
-        plain(context, indent_level).map(Value::Scalar),
+        plain(context, indent_level).map(Content::Scalar),
     )
 }
 
@@ -65,7 +65,7 @@ where
 pub fn flow_json_content<'i, Context, Input, Error>(
     context: Context,
     indent_level: IndentLevel,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Content<'i>, Error>
 where
     Context: FlowOrKey,
     Input: InputStream<'i>,
@@ -74,10 +74,10 @@ where
     trace(
         "flow::content::flow_json_content",
         alt((
-            flow_sequence(context, indent_level).map(Value::Seq),
-            flow_mapping(context, indent_level).map(Value::Map),
-            single_quoted(context, indent_level).map(|s| Value::Scalar(Scalar::Str(s))),
-            double_quoted(context, indent_level).map(|s| Value::Scalar(Scalar::Str(s))),
+            flow_sequence(context, indent_level).map(Content::Seq),
+            flow_mapping(context, indent_level).map(Content::Map),
+            single_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::Str(s))),
+            double_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::Str(s))),
         )),
     )
 }

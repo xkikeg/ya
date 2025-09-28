@@ -2,7 +2,7 @@ use winnow::combinator::terminated;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::{combinator::trace, Parser};
 
-use crate::value::Value;
+use crate::value::Node;
 
 use super::{
     context::Key,
@@ -18,7 +18,7 @@ use super::{
 #[doc(alias = "c-s-implicit-yaml-key")]
 pub fn implicit_yaml_key<'i, Context, Input, Error>(
     context: Context,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: Key,
     Input: InputStream<'i>,
@@ -52,7 +52,7 @@ where
 #[doc(alias = "c-s-implicit-json-key")]
 pub fn implicit_json_key<'i, Context, Input, Error>(
     context: Context,
-) -> impl Parser<Input, Value<'i>, Error>
+) -> impl Parser<Input, Node<'i>, Error>
 where
     Context: Key,
     Input: InputStream<'i>,
@@ -81,14 +81,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    
-
-    
-
-    
-    
-    
-    
-    
-}
+mod tests {}

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::value::Value;
+use crate::value::Node;
 
 /// Stores anchor.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct AnchorStore<'i>(HashMap<String, Value<'i>>);
+pub struct AnchorStore<'i>(HashMap<String, Node<'i>>);
 
 impl<'i> AnchorStore<'i> {
     /// Creates a new instance.
@@ -13,12 +13,12 @@ impl<'i> AnchorStore<'i> {
     }
 
     /// Puts the given anchor, possibly replacing the previous instance.
-    pub fn put(&mut self, key: String, value: Value<'i>) {
+    pub fn put(&mut self, key: String, value: Node<'i>) {
         self.0.insert(key, value);
     }
 
     /// Returns the corresponding anchor if found.
-    pub fn get(&self, key: &str) -> Option<&Value<'i>> {
+    pub fn get(&self, key: &str) -> Option<&Node<'i>> {
         self.0.get(key)
     }
 }
