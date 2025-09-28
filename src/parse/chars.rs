@@ -49,6 +49,35 @@ pub const fn is_flow_indicator(c: char) -> bool {
     matches!(c, ',' | '[' | ']' | '{' | '}')
 }
 
+/// Indicator chars.
+///
+/// https://yaml.org/spec/1.2.2/#rule-c-indicator
+#[doc(alias = "c-flow-indicator")]
+#[inline]
+pub const fn is_indicator(c: char) -> bool {
+    matches!(
+        c,
+        '-' | '?'
+            | ':'
+            | ','
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '#'
+            | '&'
+            | '*'
+            | '!'
+            | '|'
+            | '>'
+            | '\''
+            | '"'
+            | '%'
+            | '@'
+            | '`'
+    )
+}
+
 /// JSON compatible chars.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-nb-json

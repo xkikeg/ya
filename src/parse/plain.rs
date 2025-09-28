@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{fail, trace},
+    combinator::{alt, fail, peek, terminated, trace},
+    token::one_of,
     Parser,
 };
 
@@ -16,7 +17,7 @@ use super::{
 /// https://yaml.org/spec/1.2.2/#rule-ns-plain
 #[doc(alias = "ns-plain")]
 pub fn plain<'i, Context, Input, Error>(
-    context: Context,
+    _context: Context,
     indent_level: IndentLevel,
 ) -> impl Parser<Input, Scalar<'i>, Error>
 where
@@ -24,7 +25,8 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    // TODO: fixme support other scalar type
+    // For the scalar, I'd say schema would be applied at later stage,
+    // once user want to have a value.
     Context::non_space_plain(indent_level).map(Scalar::Str)
 }
 
@@ -56,6 +58,26 @@ where
 {
     // TODO: fixme! implement this.
     trace("plain::non_space_plain_one_line", fail).parse_next(input)
+}
+
+/// Plain first character.
+///
+/// https://yaml.org/spec/1.2.2/#rule-ns-plain-first
+#[doc(alias = "ns-plain-first")]
+pub(super) fn non_space_plain_first<'i, Context, Input, Error>(
+    context: Context,
+) -> impl Parser<Input, char, Error>
+where
+    Context: FlowOrKey,
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace("plain::non_space_plain_first", move |input: &mut Input| {
+        alt((
+            one_of(|c| chars::is_non_space(c) && !chars::is_indicator(c)),
+            terminated(b"?:-", peek(one_of(Context::is_plain_safe))),
+        ))
+    })
 }
 
 /// Plain safe chars out of flow context.
