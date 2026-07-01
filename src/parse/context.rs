@@ -55,7 +55,7 @@ pub trait InOutFlow: NonKey + FlowOrKey {}
 /// * [`BlockOut`]
 pub trait InOutBlock: NonKey {}
 
-/// Flow in/out context or key context.
+/// Flow or block key context.
 /// * [`BlockKey`]
 /// * [`FlowKey`]
 pub trait Key: FlowOrKey {}
@@ -63,6 +63,11 @@ pub trait Key: FlowOrKey {}
 /// In the flow context, which is [`FlowIn`] or [`FlowKey`].
 pub trait InFlow: FlowOrKey {}
 
+/// Flow in/out/key context, or Block key.
+/// * [`BlockKey`]
+/// * [`FlowKey`]
+/// * [`FlowIn`]
+/// * [`FlowOut`]
 pub trait FlowOrKey: YamlContext {
     type Flow: InFlow;
 
