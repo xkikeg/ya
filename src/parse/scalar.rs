@@ -22,23 +22,6 @@ use super::{
     spaces::IndentLevel,
 };
 
-/// Scalar parses a scalar content.
-///
-/// TODO: remove this.
-pub fn scalar<'i, Input, Error>(input: &mut Input) -> winnow::Result<Scalar<'i>, Error>
-where
-    Input: InputStream<'i>,
-    Error: ParserError<Input>,
-{
-    // first try implementing simple string.
-    // TODO: use dispatch
-    trace(
-        "scalar",
-        double::double_quoted(context::FlowIn, IndentLevel::initial()).map(Scalar::Str),
-    )
-    .parse_next(input)
-}
-
 /// Single quoted text.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-single-quoted
@@ -57,19 +40,4 @@ where
         single::non_break_single_text(context, indent_level),
         one_of('\''),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::parse::testing;
-
-    #[test]
-    fn scalar_plain_str() {
-        let input = r#"foo"#;
-        let got = testing::parse(scalar, input).unwrap();
-
-        assert_eq!(("", Scalar::Str(Cow::Borrowed("foo"))), got);
-    }
 }

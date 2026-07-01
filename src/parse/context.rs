@@ -48,7 +48,7 @@ pub trait NonKey: YamlContext {
 /// Context which is in/out of flow.
 /// * [`FlowIn`]
 /// * [`FlowOut`]
-pub trait InOutFlow: NonKey {}
+pub trait InOutFlow: NonKey + FlowOrKey {}
 
 /// Context which is in/out of block.
 /// * [`BlockIn`]
@@ -284,7 +284,7 @@ impl FlowOrKey for FlowOut {
         Input: InputStream<'i>,
         Error: ParserError<Input>,
     {
-        plain::non_space_plain_multi_line(indent_level)
+        plain::non_space_plain_multi_line(Self, indent_level)
     }
 }
 
@@ -322,7 +322,7 @@ impl FlowOrKey for FlowIn {
         Input: InputStream<'i>,
         Error: ParserError<Input>,
     {
-        plain::non_space_plain_multi_line(indent_level)
+        plain::non_space_plain_multi_line(Self, indent_level)
     }
 }
 
@@ -360,7 +360,7 @@ impl FlowOrKey for FlowKey {
         Input: InputStream<'i>,
         Error: ParserError<Input>,
     {
-        plain::non_space_plain_one_line
+        plain::non_space_plain_one_line(Self).map(Cow::Borrowed)
     }
 }
 
@@ -398,6 +398,6 @@ impl FlowOrKey for BlockKey {
         Input: InputStream<'i>,
         Error: ParserError<Input>,
     {
-        plain::non_space_plain_one_line
+        plain::non_space_plain_one_line(Self).map(Cow::Borrowed)
     }
 }
