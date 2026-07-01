@@ -5,6 +5,13 @@ use std::borrow::Cow;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stream<'i>(pub(crate) Vec<Document<'i>>);
 
+impl<'i> Stream<'i> {
+    /// Takes the reference to the documents in the stream.
+    pub fn documents(&self) -> &[Document<'i>] {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Document<'i>(pub(crate) Node<'i>);
 
@@ -90,6 +97,13 @@ pub enum Scalar<'i> {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Mapping<'i>(pub(crate) Vec<MapEntry<'i>>);
+
+impl<'i> Mapping<'i> {
+    /// Takes the reference to the entries in the mapping.
+    pub fn entries(&self) -> &[MapEntry<'i>] {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MapEntry<'i> {
