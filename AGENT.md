@@ -147,10 +147,11 @@ Not implemented (stub returns `fail`, or missing outright) -- these are exactly 
   [yaml/yaml-test-suite](https://github.com/yaml/yaml-test-suite)); it must be checked out
   (`git submodule update --init`) for the integration test to find cases. It is pinned to tag
   `data-2022-01-17`.
-- The integration test currently only checks "valid cases parse without error" and "error cases fail
-  to parse" -- it does not yet verify parse *shape* against the suite's `test.event` files. Wiring
-  that comparison up is on the TODO list below and should be near the top once enough of the grammar
-  is implemented for it to be useful.
+- The integration test both checks "error cases fail to parse" and, for valid cases, structurally
+  compares the parse against the suite's `test.event` fixture (representation-level: node shape,
+  scalar content, resolved tag -- not presentation style or anchor names; see Phase 7 below for why).
+  Run `cargo test --test integration_tests conformance_report -- --nocapture` (or just read
+  `target/yaml_conformance_report.txt` after any `cargo test`) for the current pass-rate breakdown.
 - `benches/benchmark.rs` (Criterion) benchmarks `flow_sequence` only today; its own comment notes
   plain scalars aren't benchmarked yet because they're unsupported.
 
@@ -256,12 +257,37 @@ rule(s) it corresponds to and the file(s) most directly involved.
       "schema applied at later stage" comment already in the code).
 
 ### Phase 7 -- Conformance harness
-- [ ] `tests/integration_tests.rs::check_input`: actually parse each case's `test.event` (libyaml
+- [x] `tests/integration_tests.rs::check_input`: actually parse each case's `test.event` (libyaml
       event-stream format) and compare against the parsed `value::Stream`, instead of only checking
-      "parses without error". This is what turns the yaml-test-suite submodule from a smoke test into
-      a real conformance signal.
-- [ ] Track/report pass rate (e.g. a summary printed at the end, or `#[ignore]`-gating known-failing
-      cases with a tracking comment) so partial progress is visible rather than all-or-nothing.
+      "parses without error". Implemented via a shared `ExpectedNode` tree type: the event-format
+      text is parsed into that tree (with `=ALI` aliases expanded against a locally-built anchor map
+      while walking, mirroring `alias.rs`'s own eager substitution), `ya`'s own `value::Stream` is
+      converted into the same tree shape, and a recursive `diff_nodes` reports the first point of
+      divergence, categorized as `StructuralMismatch` (wrong node kind / seq-map length -- usually an
+      unimplemented-grammar stub) vs. `ContentMismatch` (right shape, wrong scalar value/tag).
+      Required two small new public accessors, `value::Stream::documents()` and
+      `value::Mapping::entries()` (their backing `Vec`s were `pub(crate)`, which is exactly why this
+      TODO couldn't be done from `tests/` -- an external crate -- before).
+      **Deliberately out of scope**: presentation style (plain vs. single-quoted, flow vs. block) and
+      anchor *names* are not compared, because `value::Node` can't represent either yet (and
+      `Scalar::SingleStr` currently covers both plain and single-quoted, see Phase 1) -- comparison
+      focuses on the representation graph (shape + content + resolved tag), matching this crate's
+      stated end goal of serde/Construct-phase deserialization over presentation round-tripping.
+- [x] Track/report pass rate: `tests/integration_tests.rs::conformance_report` (a plain, non-ignored,
+      never-failing `#[test]`) walks the whole corpus, tallies pass/fail by category (adding
+      `UnexpectedSuccessOnErrorCase` for error-cases the parser wrongly accepts, `MalformedFixture`
+      for unreadable/unparseable fixtures, and `ParserPanic` for cases where `ya` itself panics
+      instead of returning a parse error -- caught via `catch_unwind` with a replaced panic hook so
+      one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
+      `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
+      conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
+      `cargo test`. As of this writing: **~114/402 (28%)** passing -- expected, given how much of
+      Phases 1-6 is still unimplemented; re-run to get a current number as later phases land.
+      Two real bugs the harness surfaced while implementing this (not fixed here, still open):
+      `ya` panics (a tripped `winnow` "`repeat` parsers must always consume" invariant) on
+      completely empty input and on input consisting solely of a `...` document-end marker
+      (corpus cases `AVM7`, `HWV9`); and double-quoted scalar parsing drops a tab character
+      adjacent to an escaped space (corpus cases `02`/`03`, "Trailing tabs in double quoted").
 - [ ] Once Phase 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 
 ### Phase 8 -- Polish (do last, or opportunistically)
