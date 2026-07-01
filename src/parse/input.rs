@@ -195,9 +195,8 @@ impl<'i> Stream for Input<'i> {
     }
 
     #[inline(always)]
-    fn raw(&self) -> &dyn std::fmt::Debug {
-        #[allow(deprecated)]
-        self.inner.raw()
+    fn trace(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.trace(f)
     }
 }
 
@@ -384,9 +383,8 @@ impl<I: Stream> Stream for WithLimit<I> {
     }
 
     #[inline(always)]
-    fn raw(&self) -> &dyn std::fmt::Debug {
-        #[allow(deprecated)]
-        self.inner.raw()
+    fn trace(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.trace(f)
     }
 }
 
