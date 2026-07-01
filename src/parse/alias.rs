@@ -60,13 +60,13 @@ mod tests {
         let mut input = Input::new("*foo");
         input.anchor_store_mut().put(
             "foo".to_string(),
-            Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value")))),
+            Node::unspecified(Content::Scalar(Scalar::SingleStr(Cow::Borrowed("value")))),
         );
 
         assert_eq!(
             (
                 "",
-                Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value"))))
+                Node::unspecified(Content::Scalar(Scalar::SingleStr(Cow::Borrowed("value"))))
             ),
             testing::parse_with_input(alias_node, input).unwrap()
         );
@@ -77,7 +77,7 @@ mod tests {
         let mut input = Input::new("*foo");
         input.anchor_store_mut().put(
             "bar".to_string(),
-            Node::unspecified(Content::Scalar(Scalar::Str(Cow::Borrowed("value")))),
+            Node::unspecified(Content::Scalar(Scalar::SingleStr(Cow::Borrowed("value")))),
         );
 
         testing::parse_with_input(alias_node, input.clone()).unwrap_err();

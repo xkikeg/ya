@@ -9,7 +9,11 @@ use winnow::{
 use crate::value::Scalar;
 
 use super::{
-    chars, context::FlowOrKey, error::ParserError, input::InputStream, spaces::IndentLevel,
+    chars,
+    context::{FlowOrKey, InOutFlow, Key},
+    error::ParserError,
+    input::InputStream,
+    spaces::IndentLevel,
 };
 
 /// Plain scalar.
@@ -27,17 +31,19 @@ where
 {
     // For the scalar, I'd say schema would be applied at later stage,
     // once user want to have a value.
-    Context::non_space_plain(indent_level).map(Scalar::Str)
+    Context::non_space_plain(indent_level).map(Scalar::SingleStr)
 }
 
 /// Plain text content, multi lines.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-ns-plain-multi-line
 #[doc(alias = "ns-plain-multi-line")]
-pub(super) fn non_space_plain_multi_line<'i, Input, Error>(
+pub(super) fn non_space_plain_multi_line<'i, Context, Input, Error>(
+    context: Context,
     indent_level: IndentLevel,
 ) -> impl Parser<Input, Cow<'i, str>, Error>
 where
+    Context: InOutFlow,
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
@@ -49,15 +55,18 @@ where
 ///
 /// https://yaml.org/spec/1.2.2/#rule-ns-plain-one-line
 #[doc(alias = "ns-plain-one-line")]
-pub(super) fn non_space_plain_one_line<'i, Input, Error>(
-    input: &mut Input,
-) -> winnow::Result<Cow<'i, str>, Error>
+pub(super) fn non_space_plain_one_line<'i, Context, Input, Error>(
+    context: Context,
+) -> impl Parser<Input, &'i str, Error>
 where
+    Context: Key,
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    // TODO: fixme! implement this.
-    trace("plain::non_space_plain_one_line", fail).parse_next(input)
+    trace(
+        "plain::non_space_plain_one_line",
+        (non_space_plain_first(context)).take(),
+    )
 }
 
 /// Plain first character.
@@ -72,12 +81,29 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("plain::non_space_plain_first", move |input: &mut Input| {
+    trace(
+        "plain::non_space_plain_first",
         alt((
             one_of(|c| chars::is_non_space(c) && !chars::is_indicator(c)),
-            terminated(b"?:-", peek(one_of(Context::is_plain_safe))),
-        ))
-    })
+            terminated(one_of(b"?:-"), peek(one_of(Context::is_plain_safe))),
+        )),
+    )
+}
+
+/// Non-space plain chars.
+///
+/// https://yaml.org/spec/1.2.2/#rule-ns-plain-char
+#[doc(alias = "ns-plain-char")]
+pub(super) fn non_space_plain_chars<'i, Context, Input, Error>(
+    _context: Context,
+) -> impl Parser<Input, &'i str, Error>
+where
+    Context: FlowOrKey,
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    // TODO: fixme! implement this.
+    trace("plain::non_space_plain_chars", fail)
 }
 
 /// Plain safe chars out of flow context.

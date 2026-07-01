@@ -190,15 +190,15 @@ mod tests {
                 "",
                 value::Stream(vec![value::Document(Node::unspecified(Content::Seq(
                     vec![
-                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
-                            "foo"
-                        )))),
-                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
-                            "bar"
-                        )))),
-                        Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
-                            "baz"
-                        )))),
+                        Node::unspecified(Content::Scalar(value::Scalar::SingleStr(
+                            Cow::Borrowed("foo")
+                        ))),
+                        Node::unspecified(Content::Scalar(value::Scalar::SingleStr(
+                            Cow::Borrowed("bar")
+                        ))),
+                        Node::unspecified(Content::Scalar(value::Scalar::SingleStr(
+                            Cow::Borrowed("baz")
+                        ))),
                     ]
                 )))])
             ),
@@ -214,10 +214,10 @@ mod tests {
                 "",
                 value::Stream(vec![value::Document(Node::unspecified(Content::Map(
                     value::Mapping(vec![value::MapEntry {
-                        key: Node::unspecified(Content::Scalar(value::Scalar::Str(Cow::Borrowed(
-                            "foo"
-                        )))),
-                        value: Node::unspecified(Content::Scalar(value::Scalar::Str(
+                        key: Node::unspecified(Content::Scalar(value::Scalar::SingleStr(
+                            Cow::Borrowed("foo")
+                        ))),
+                        value: Node::unspecified(Content::Scalar(value::Scalar::SingleStr(
                             Cow::Borrowed("bar")
                         ))),
                     }])

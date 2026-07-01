@@ -76,8 +76,8 @@ where
         alt((
             flow_sequence(context, indent_level).map(Content::Seq),
             flow_mapping(context, indent_level).map(Content::Map),
-            single_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::Str(s))),
-            double_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::Str(s))),
+            single_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::SingleStr(s))),
+            double_quoted(context, indent_level).map(|s| Content::Scalar(Scalar::DoubleStr(s))),
         )),
     )
 }

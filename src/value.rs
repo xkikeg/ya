@@ -80,7 +80,8 @@ pub enum Content<'i> {
 /// Scalar of the YAML.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar<'i> {
-    Str(Cow<'i, str>),
+    SingleStr(Cow<'i, str>),
+    DoubleStr(Cow<'i, str>),
     Null,
     Bool(bool),
     Int(i64),
