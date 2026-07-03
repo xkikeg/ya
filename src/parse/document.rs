@@ -34,7 +34,7 @@ where
                 '.' => preceded(
                     (
                         repeat(1.., document_suffix::<_, Error>).map(|()|()),
-                        repeat(0.., document_prefix).map(|()|()),
+                        repeat(0.., document_prefix.take().verify(|s: &str| !s.is_empty()).void()).map(|()|()),
                     ),
                     opt(any_document)),
                 chars::BOM => chars::BOM.value(None),
@@ -150,7 +150,14 @@ where
         "document::document_prefix",
         (
             opt(chars::BOM),
-            repeat(0.., spaces::line_comment).map(|()| ()),
+            repeat(
+                0..,
+                spaces::line_comment
+                    .take()
+                    .verify(|s: &str| !s.is_empty())
+                    .void(),
+            )
+            .map(|()| ()),
         )
             .void(),
     )
@@ -202,6 +209,24 @@ mod tests {
                     ]
                 )))])
             ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
+    #[test]
+    fn empty_input_parses_as_empty_stream() {
+        let input = "";
+        assert_eq!(
+            ("", value::Stream(vec![])),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
+    #[test]
+    fn dots_only_parses_as_empty_stream() {
+        let input = "...";
+        assert_eq!(
+            ("", value::Stream(vec![])),
             testing::parse(yaml_stream, input).unwrap()
         );
     }

@@ -72,8 +72,8 @@ where
     trace(
         "double::non_break_double_multi_line",
         move |input: &mut Input| {
-            let (mut current, mut original) =
-                non_break_double_one_line.with_taken().parse_next(input)?;
+            let (mut current, mut literal_tail_len) =
+                non_break_double_chars.parse_next(input)?;
             loop {
                 let may_break = opt(alt((
                     double_escaped_line_break(indent_level).map(|s| (false, s)),
@@ -85,21 +85,21 @@ where
                     Some((must_trim, line_break)) => (must_trim, line_break),
                 };
                 if must_trim {
-                    // trim the last s-white in the original.
-                    // note it must not trim the current as it already recognized escape sequence.
-                    let keep = original
-                        .rfind(|c| !chars::is_white_space(c))
-                        .map(|x| x + 1)
-                        .unwrap_or(0);
-                    let cutoff = original.len() - keep;
-                    let newlen = current.len() - cutoff;
+                    // Only the trailing run of characters copied verbatim from the
+                    // source (not produced by an escape sequence) may be trimmed:
+                    // an escaped space/tab (e.g. "\t" or "\ ") must survive folding
+                    // even though it resolves to a whitespace character.
+                    let tail_start = current.len() - literal_tail_len;
+                    let tail = &current[tail_start..];
+                    let ws_trim = tail.len() - tail.trim_end_matches(chars::is_white_space).len();
+                    let newlen = current.len() - ws_trim;
                     current.to_mut().truncate(newlen);
                 }
                 current.to_mut().push_str(&line_break);
-                let (next_line, next_original) =
-                    non_break_double_one_line.with_taken().parse_next(input)?;
+                let (next_line, next_literal_tail_len) =
+                    non_break_double_chars.parse_next(input)?;
                 current.to_mut().push_str(&next_line);
-                original = next_original;
+                literal_tail_len = next_literal_tail_len;
             }
         },
     )
@@ -145,16 +145,26 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("double::non_break_double_one_line", non_break_double_chars).parse_next(input)
+    trace(
+        "double::non_break_double_one_line",
+        non_break_double_chars.map(|(s, _)| s),
+    )
+    .parse_next(input)
 }
 
 /// Double quoted chars.
+///
+/// Returns the resolved content together with the byte length of its
+/// trailing run of characters that were copied verbatim from the source
+/// (i.e. not produced by an escape sequence). Callers that fold line breaks
+/// use that length to avoid trimming whitespace that only exists because an
+/// escape sequence (e.g. `\t`, `\ `) resolved to a whitespace character.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-nb-double-char
 #[doc(alias = "nb-double-char")]
 fn non_break_double_chars<'i, Input, Error>(
     input: &mut Input,
-) -> winnow::Result<Cow<'i, str>, Error>
+) -> winnow::Result<(Cow<'i, str>, usize), Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -162,18 +172,18 @@ where
     trace(
         "double::non_break_double_chars",
         move |input: &mut Input| {
-            let mut current: Cow<str> = take_while(0.., is_normal_double_char)
-                .map(Cow::Borrowed)
-                .parse_next(input)?;
+            let initial = take_while(0.., is_normal_double_char).parse_next(input)?;
+            let mut current: Cow<str> = Cow::Borrowed(initial);
+            let mut literal_tail_len = initial.len();
             loop {
                 let escaped_newline = peek(opt(literal("\\\n"))).parse_next(input)?;
                 if escaped_newline.is_some() {
                     // escaped newline is handled outside of this function.
-                    return Ok(current);
+                    return Ok((current, literal_tail_len));
                 }
                 let maybe_escape = opt(preceded(one_of('\\'), any)).parse_next(input)?;
                 let esc: char = match maybe_escape {
-                    None => return Ok(current),
+                    None => return Ok((current, literal_tail_len)),
                     Some(c) => c,
                 };
                 let c = match (esc, escape_to_char(esc)) {
@@ -199,6 +209,7 @@ where
                 current.to_mut().push(c);
                 let next_normal = take_while(0.., is_normal_double_char).parse_next(input)?;
                 current.to_mut().push_str(next_normal);
+                literal_tail_len = next_normal.len();
             }
         },
     )
@@ -312,7 +323,7 @@ mod tests {
     fn non_break_double_chars_no_escape() {
         let input = "foo bar\t\x7f\"";
         assert_eq!(
-            ("\"", Cow::Borrowed("foo bar\t\x7f")),
+            ("\"", (Cow::Borrowed("foo bar\t\x7f"), "foo bar\t\x7f".len())),
             testing::parse(non_break_double_chars, input).unwrap()
         );
     }
@@ -323,9 +334,69 @@ mod tests {
         assert_eq!(
             (
                 "",
-                Cow::Owned("foo\t barあいうえお \u{10083}\n".to_string())
+                (Cow::Owned("foo\t barあいうえお \u{10083}\n".to_string()), 0)
             ),
             testing::parse(non_break_double_chars, input).unwrap()
+        );
+    }
+
+    #[test]
+    fn double_quoted_escaped_tab_before_fold_is_preserved() {
+        // Corpus case DE56/00: an escaped tab ("\t") immediately followed by
+        // an unescaped line break must survive folding.
+        let input = "\"1 trailing\\t\n    tab\"";
+        assert_eq!(
+            ("", Cow::Owned("1 trailing\t tab".to_string())),
+            testing::parse(
+                double_quoted(context::FlowIn, IndentLevel::initial()),
+                input
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn double_quoted_escaped_tab_with_trailing_spaces_before_fold_is_preserved() {
+        // Corpus case DE56/01: trailing unescaped spaces after an escaped tab
+        // are trimmed, but the escaped tab itself must survive.
+        let input = "\"2 trailing\\t  \n    tab\"";
+        assert_eq!(
+            ("", Cow::Owned("2 trailing\t tab".to_string())),
+            testing::parse(
+                double_quoted(context::FlowIn, IndentLevel::initial()),
+                input
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn double_quoted_escaped_raw_tab_before_fold_is_preserved() {
+        // Corpus case DE56/02: "\" followed by a literal tab byte is also a
+        // valid escape for tab and must survive folding the same way.
+        let input = "\"3 trailing\\\t\n    tab\"";
+        assert_eq!(
+            ("", Cow::Owned("3 trailing\t tab".to_string())),
+            testing::parse(
+                double_quoted(context::FlowIn, IndentLevel::initial()),
+                input
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn double_quoted_unescaped_trailing_tab_is_trimmed() {
+        // Corpus case DE56/04: an unescaped (literal) trailing tab is
+        // ordinary trailing whitespace and must be trimmed by folding.
+        let input = "\"5 trailing\t\n    tab\"";
+        assert_eq!(
+            ("", Cow::Owned("5 trailing tab".to_string())),
+            testing::parse(
+                double_quoted(context::FlowIn, IndentLevel::initial()),
+                input
+            )
+            .unwrap()
         );
     }
 }

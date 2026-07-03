@@ -1,5 +1,5 @@
 use winnow::{
-    combinator::{peek, preceded, repeat, trace},
+    combinator::{not, peek, preceded, repeat, trace},
     token::one_of,
     Parser,
 };
@@ -52,7 +52,8 @@ where
     trace(
         "block::seq::block_sequence",
         preceded(
-            ('-', peek(one_of(chars::is_non_space))),
+            // note: `not` doesn't consume the input.
+            ('-', not(one_of(chars::is_non_space))),
             block_indented(BlockIn, indent_level),
         ),
     )

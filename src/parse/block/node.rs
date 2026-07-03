@@ -65,7 +65,7 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "block::node::block_in_block",
+        "block::node::flow_in_block",
         delimited(
             spaces::separate(FlowOut, indent_level + 1),
             flow_node(FlowOut, indent_level + 1),
