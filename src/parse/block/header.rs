@@ -16,7 +16,7 @@ pub enum ChompingMode {
 
 /// Block chomping indicator.
 /// https://yaml.org/spec/1.2.2/#rule-c-chomping-indicator
-#[doc(alias = "l+block-mapping")]
+#[doc(alias = "c-chomping-indicator")]
 pub fn chomping_indicator<'i, Input, Error>(
     input: &mut Input,
 ) -> winnow::Result<ChompingMode, Error>

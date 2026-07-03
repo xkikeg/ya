@@ -187,7 +187,7 @@ update this list as work lands so it stays a reliable map of what's left.
 
 ### Phase 0 -- Known bugs (small, self-contained; each is an independent task)
 
-- [ ] **Panic on empty input and on `...`-only input** (suite cases `AVM7`, `HWV9`; found by the
+- [x] **Panic on empty input and on `...`-only input** (suite cases `AVM7`, `HWV9`; found by the
       Phase 7 harness). Root cause: winnow 1.0 asserts "`repeat` parsers must always consume", and
       `spaces.rs::line_comment` *can* succeed consuming nothing at EOF -- `separate_in_line`'s
       start-of-line escape hatch (`spaces.rs:173-176`) succeeds empty, and `break_comment`'s `eof`
@@ -200,26 +200,26 @@ update this list as work lands so it stays a reliable map of what's left.
       breaks when `.with_taken()` returns empty (the pattern already used in
       `spaces.rs::line_comments` and `yaml_stream`'s outer loop). Add `yaml_stream` unit tests for
       `""` and `"..."` (both should parse as an empty stream, not panic).
-- [ ] **Double-quoted scalar drops a tab adjacent to an escaped space** (suite cases named
+- [x] **Double-quoted scalar drops a tab adjacent to an escaped space** (suite cases named
       "Trailing tabs in double quoted", see conformance report). Diagnose in
       `double.rs::non_break_double_multi_line`'s fold/trim step: when trimming trailing `s-white`
       before a folded break, an *escaped* whitespace (`\ ` / `\t`) must not be treated as trimmable,
       and a real tab next to one must survive. Reproduce with the two corpus cases and spec
       example 7.5 before fixing.
-- [ ] **`block/seq.rs:55` lookahead is inverted.** Spec
+- [x] **`block/seq.rs:55` lookahead is inverted.** Spec
       [`c-l-block-seq-entry`](https://yaml.org/spec/1.2.2/#rule-c-l-block-seq-entry) is
       `'-' [lookahead ≠ ns-char] ...` (the char after `-` must NOT be non-space, else it's a plain
       scalar like `-foo`), but the code has `peek(one_of(chars::is_non_space))`, i.e. requires that
       it IS. Fix: `winnow::combinator::not(one_of(chars::is_non_space))` (`not` peeks and also
       succeeds at EOF). Currently masked because `block_indented` is a `fail` stub; must land
       before/with Phase 4.
-- [ ] **`key.rs:31-33` / `key.rs:64-67`: trailing `s-separate-in-line` must be optional.** Spec
+- [x] **`key.rs:31-33` / `key.rs:64-67`: trailing `s-separate-in-line` must be optional.** Spec
       [`c-s-implicit-yaml-key`](https://yaml.org/spec/1.2.2/#rule-c-s-implicit-yaml-key) /
       `c-s-implicit-json-key` end with `s-separate-in-line?` (optional), but the code requires it.
       Consequence today: a flow pair key directly followed by `:` (e.g. `[a: b]` once plain scalars
       work, or `["a": b]` already) fails because there's no whitespace before the `:`. Fix: wrap in
       `opt(...)`. Note the same helpers get reused for block mapping implicit keys in Phase 4.
-- [ ] Cosmetic: `block/node.rs:68` `trace` label inside `flow_in_block` says
+- [x] Cosmetic: `block/node.rs:68` `trace` label inside `flow_in_block` says
       `"block::node::block_in_block"` (copy-paste); `block/header.rs:19` `#[doc(alias)]` on
       `chomping_indicator` says `"l+block-mapping"` (should be `"c-chomping-indicator"`).
 
@@ -531,7 +531,7 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: ~114/402 (28%)** -- update this number whenever a phase
+      `cargo test`. **Current pass rate: ~118/402 (29%)** -- update this number whenever a phase
       lands. The real bugs this harness surfaced are now tracked as Phase 0 above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 

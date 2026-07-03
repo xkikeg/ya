@@ -1,4 +1,4 @@
-use winnow::combinator::terminated;
+use winnow::combinator::{opt, terminated};
 use winnow::error::{StrContext, StrContextValue};
 use winnow::{combinator::trace, Parser};
 
@@ -29,7 +29,7 @@ where
         // TODO: it's unclear if we should limit the length for the worst case.
         let (got, taken) = terminated(
             flow::node::flow_yaml_node(context, IndentLevel::new(0)),
-            spaces::separate_in_line,
+            opt(spaces::separate_in_line),
         )
         .with_taken()
         .parse_next(input)?;
@@ -63,7 +63,7 @@ where
         // TODO: it's unclear if we should limit the length for the worst case.
         let (got, taken) = terminated(
             flow::node::flow_json_node(context, IndentLevel::new(0)),
-            spaces::separate_in_line,
+            opt(spaces::separate_in_line),
         )
         .with_taken()
         .parse_next(input)?;
@@ -81,4 +81,40 @@ where
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    use std::borrow::Cow;
+
+    use crate::parse::{context::FlowKey, testing};
+    use crate::value::{Content, Scalar};
+
+    #[test]
+    fn implicit_json_key_without_trailing_separator() {
+        // c-s-implicit-json-key ends with `s-separate-in-line?` (optional):
+        // a key directly followed by `:` (no whitespace) must still parse.
+        let input = r#""a":b"#;
+        assert_eq!(
+            (
+                ":b",
+                Node::unspecified(Content::Scalar(Scalar::DoubleStr(Cow::Borrowed("a"))))
+            ),
+            testing::parse(implicit_json_key(FlowKey), input).unwrap()
+        );
+    }
+
+    #[test]
+    fn implicit_yaml_key_without_trailing_separator() {
+        // Plain scalars only support a single character today (Phase 1 is
+        // still pending), so exercise the `s-separate-in-line?` fix with a
+        // one-character plain key.
+        let input = "a:b";
+        assert_eq!(
+            (
+                ":b",
+                Node::unspecified(Content::Scalar(Scalar::SingleStr(Cow::Borrowed("a"))))
+            ),
+            testing::parse(implicit_yaml_key(FlowKey), input).unwrap()
+        );
+    }
+}
