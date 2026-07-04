@@ -105,14 +105,14 @@ mod tests {
 
     #[test]
     fn implicit_yaml_key_without_trailing_separator() {
-        // Plain scalars only support a single character today (Phase 1 is
-        // still pending), so exercise the `s-separate-in-line?` fix with a
-        // one-character plain key.
-        let input = "a:b";
+        // c-s-implicit-yaml-key ends with `s-separate-in-line?` (optional): a plain key directly
+        // followed by `:` (no whitespace) must still parse. `,` isn't ns-plain-safe in flow
+        // context, so the plain scalar (and thus the key) ends right before the `:`.
+        let input = "abc:,rest";
         assert_eq!(
             (
-                ":b",
-                Node::unspecified(Content::Scalar(Scalar::SingleStr(Cow::Borrowed("a"))))
+                ":,rest",
+                Node::unspecified(Content::Scalar(Scalar::Plain(Cow::Borrowed("abc"))))
             ),
             testing::parse(implicit_yaml_key(FlowKey), input).unwrap()
         );

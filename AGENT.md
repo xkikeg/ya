@@ -53,7 +53,7 @@ src/
                         as flow mapping/pair keys)
     single.rs           single-quoted flow scalar content (nb-single-*)
     double.rs           double-quoted flow scalar content incl. escape sequences (nb-double-*)
-    plain.rs            plain (unquoted) flow scalar content (ns-plain-*) -- WEAKEST part of the tree
+    plain.rs            plain (unquoted) flow scalar content (ns-plain-*)
     scalar.rs           ties single/double quoted content to c-single-quoted / c-double-quoted
     document.rs         Chapter 9: l-yaml-stream, l-any-document, l-bare-document, document
                         prefix/suffix; public `yaml_stream()` entry point + its tests
@@ -87,13 +87,14 @@ Roughly implemented and unit-tested:
   because anchor *properties* aren't parsed (see gaps).
 - Document stream skeleton for the *bare document* case (`document.rs::yaml_stream`,
   `bare_document`), with two working unit tests (flow seq, flow map).
+- Plain scalars (`plain.rs`), one-line and multi-line, including line folding, the `#`-lookbehind
+  and trailing-`:` rules of `ns-plain-char`, and the `c-forbidden` exclusion so a plain scalar can't
+  swallow a `---`/`...` marker line (`document.rs::forbidden`). Produces `value::Scalar::Plain`, a
+  new variant separate from `SingleStr`/`DoubleStr` since only plain-style scalars are eligible for
+  core-schema resolution (Phase 6). See Phase 1 below (now complete).
 
 Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
 `cargo build` warning-free pass would still leave semantically incomplete:
-- `plain.rs::non_space_plain_chars` -- stub. `plain.rs::non_space_plain_multi_line` -- stub.
-  `non_space_plain_one_line` only ever consumes a single first character today (it does not call
-  `non_space_plain_chars` in a loop), so **plain scalars are effectively unusable** beyond one char.
-  This is the single most impactful gap since plain scalars are YAML's most common scalar style.
 - Node properties (anchor `&name` / tag `!!str`, `!<...>`, `!handle!suffix`) are entirely unparsed.
   `flow/node.rs` has three `// TODO: fixme Support properties.` markers; there is no `properties.rs`
   module and no tag-handle resolution yet. `value::Tag` exists as a data type but nothing produces
@@ -223,13 +224,13 @@ update this list as work lands so it stays a reliable map of what's left.
       `"block::node::block_in_block"` (copy-paste); `block/header.rs:19` `#[doc(alias)]` on
       `chomping_indicator` says `"l+block-mapping"` (should be `"c-chomping-indicator"`).
 
-### Phase 1 -- Plain scalars (highest priority: most common YAML scalar style, currently broken)
+### Phase 1 -- Plain scalars (highest priority: most common YAML scalar style) -- DONE
 
 All in `plain.rs` unless noted. The already-working `non_space_plain_first` (`plain.rs:76`) and the
 context plumbing (`FlowOrKey::is_plain_safe`, `FlowOrKey::non_space_plain` in `context.rs`) stay
 as-is; only the stubs and the one-line/multi-line composition change.
 
-- [ ] **1a. Lookbehind support in `input.rs`.**
+- [x] **1a. Lookbehind support in `input.rs`.**
       [`ns-plain-char`](https://yaml.org/spec/1.2.2/#rule-ns-plain-char) has a
       `[lookbehind = ns-char] '#'` alternative; winnow has no lookbehind, but this codebase already
       solved the same problem once: `TrackStartOfLine` (`input.rs:76-90`) inspects the byte before
@@ -238,7 +239,7 @@ as-is; only the stubs and the one-line/multi-line composition change.
       sibling trait): `self.original[..self.inner.previous_token_end()].chars().next_back()`,
       `None` at offset 0. Delegate on `WithLimit`, and add the bound to the `InputStream` trait
       alias *and* its blanket impl (`input.rs:11-31`).
-- [ ] **1b. `ns-plain-char` (`non_space_plain_chars`).** Change the stub's return type from
+- [x] **1b. `ns-plain-char` (`non_space_plain_chars`).** Change the stub's return type from
       `&'i str` to `char` (it's a single-char rule) and implement the spec's three alternatives as
       an `alt`:
       1. `one_of(|c| Context::is_plain_safe(c) && c != ':' && c != '#')`;
@@ -249,42 +250,50 @@ as-is; only the stubs and the one-line/multi-line composition change.
       Note the lookbehind arm is self-consistent everywhere it's reachable: mid-line after a plain
       char it fires (`foo#bar` is one scalar), after whitespace or a line break the previous char
       isn't `ns-char` so ` #...` correctly stays a comment.
-- [ ] **1c. `nb-ns-plain-in-line` (new fn `non_break_non_space_plain_in_line(context)`).**
+- [x] **1c. `nb-ns-plain-in-line` (new fn `non_break_non_space_plain_in_line(context)`).**
       Spec: `( s-white* ns-plain-char(c) )*`. Transcribe literally:
       `repeat(0.., (take_while(0.., chars::is_white_space), non_space_plain_chars(context))).map(|()| ()).take()`
       returning borrowed `&'i str`. Trailing-whitespace correctness comes free: `repeat` backtracks
       the whole failed iteration, so in `foo  # comment` the two spaces before `#` are left
       unconsumed. Each successful iteration consumes ≥ 1 char (the plain char), so the
       repeat-must-consume invariant holds even when `s-white*` is empty.
-- [ ] **1d. `ns-plain-one-line` (`non_space_plain_one_line`).** Replace "first char only" with the
+- [x] **1d. `ns-plain-one-line` (`non_space_plain_one_line`).** Replace "first char only" with the
       spec composition: `(non_space_plain_first(context), non_break_non_space_plain_in_line(context)).take()`.
-- [ ] **1e. `s-ns-plain-next-line` (new fn `space_non_space_plain_next_line(context, indent_level)`).**
+      Landed with its `Context` bound relaxed from `Key` to `FlowOrKey`, since 1f now also calls it
+      for `FlowIn`/`FlowOut` (not just the two key contexts).
+- [x] **1e. `s-ns-plain-next-line` (new fn `space_non_space_plain_next_line(context, indent_level)`).**
       Spec: `s-flow-folded(n) ns-plain-char(c) nb-ns-plain-in-line(c)` -- note the continuation line
       starts with `ns-plain-char`, *not* `ns-plain-first`. Compose from `spaces::flow_folded`
       (`spaces.rs:351`), 1b and 1c; return the fold `Cow` plus the line text so the caller can
       concatenate.
-- [ ] **1f. `ns-plain-multi-line` (`non_space_plain_multi_line`).** Mirror
+- [x] **1f. `ns-plain-multi-line` (`non_space_plain_multi_line`).** Mirror
       `single.rs::non_break_single_multi_line`'s hand-rolled loop (`single.rs:40-68`): start with
       `Cow::Borrowed` of the one-line parse, then loop `opt(space_non_space_plain_next_line(...))`,
       pushing fold string + line text into `current.to_mut()`. Simpler than the single-quoted
       version: no trailing-`s-white` trim step is needed, because 1c guarantees a plain line never
       ends in whitespace.
-- [ ] **1g. Document-marker exclusion (may defer to Phase 5, conformance will flag it).** A
-      multi-line plain scalar must not swallow a `---`/`...` line
-      ([`c-forbidden`](https://yaml.org/spec/1.2.2/#rule-c-forbidden), excluded from
-      `l-bare-document`). Practical fix: add `document.rs::forbidden` (start-of-line + `---`|`...` +
-      followed by break/white/EOF, use `spaces::start_of_line`) and `peek(not(forbidden))` at the
-      start of each continuation line in 1e.
-- [ ] **1h. New `value::Scalar::Plain(Cow<'i, str>)` variant**, and map `plain()` (`plain.rs:34`) to
+- [x] **1g. Document-marker exclusion.** A multi-line plain scalar must not swallow a `---`/`...`
+      line ([`c-forbidden`](https://yaml.org/spec/1.2.2/#rule-c-forbidden), excluded from
+      `l-bare-document`). Added `document.rs::forbidden` (start-of-line + `---`|`...` + followed by
+      break/white/EOF, using `spaces::start_of_line`) and `not(forbidden)` before parsing each
+      continuation line in `space_non_space_plain_next_line` (1e). Turned out this wasn't only a
+      continuation-line concern: a *lone* `...`/`---` as an entire bare document (e.g. the `"..."`
+      stream test from Phase 0) would otherwise parse as a one-line plain scalar and swallow the
+      document-end marker on the very first line, so `plain()` itself also gates on
+      `not(forbidden)` before calling `Context::non_space_plain`.
+- [x] **1h. New `value::Scalar::Plain(Cow<'i, str>)` variant**, and map `plain()` (`plain.rs:34`) to
       it instead of `Scalar::SingleStr`. Required so Phase 6 can distinguish plain (schema-resolvable)
-      from single-quoted (always `str`). Update the `Scalar` → `ExpectedNode` conversion in
-      `tests/integration_tests.rs` and any unit tests that asserted `SingleStr` for plains.
-- [ ] **1i. Tests.** Spec examples 7.9–7.12 from
+      from single-quoted (always `str`). Updated the `Scalar` → `ExpectedNode` conversion in
+      `tests/integration_tests.rs` and the unit tests that previously asserted `SingleStr` for plains
+      (`key.rs`'s implicit-yaml-key test).
+- [x] **1i. Tests.** Spec example 7.12 "Plain Lines" (verified against the built spec HTML --
+      AGENT.md's original "7.9-7.12" range was off; §7.3.3 only has two examples, "Plain Implicit
+      Keys" (7.11) and "Plain Lines" (7.12)) from
       [§7.3.3](https://yaml.org/spec/1.2.2/#733-plain-style); edge fixtures: `::vector`, `-123`,
       `foo#bar` (one scalar) vs `foo #bar` (scalar + comment), `a:b` (one scalar), `key:` boundary
-      (stops before `:`), multi-line folding with blank lines. Add an end-to-end `document.rs` test
-      like `[one, two]`. Re-run the conformance report and update the number in Phase 7 (expect a
-      large jump).
+      (stops before `:`), a document-end-marker regression case. Added an end-to-end `document.rs`
+      test, `[one, two]`. Conformance report updated in Phase 7 below: 118/402 (29%) -> 129/402
+      (32.1%).
 
 Escalate if: the `previous_char` lookbehind turns out to conflict with `WithLimit` semantics or
 another input wrapper -- the fallback design (thread a "previous char class" flag through a fused
@@ -531,7 +540,7 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: ~118/402 (29%)** -- update this number whenever a phase
+      `cargo test`. **Current pass rate: ~129/402 (32%)** -- update this number whenever a phase
       lands. The real bugs this harness surfaced are now tracked as Phase 0 above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 

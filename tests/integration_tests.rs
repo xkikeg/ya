@@ -7,12 +7,10 @@
 //! against the tree `ya` itself produces for `in.yaml`.
 //!
 //! The comparison is deliberately scoped to the *representation* (node kind, nesting, scalar
-//! content, resolved tag), not *presentation* (plain vs. quoted style, flow vs. block style, or
-//! anchor names): `value::Node` doesn't carry that information today (its stated purpose is
-//! eventual serde/Construct-phase deserialization, not YAML round-tripping), and
-//! `value::Scalar::SingleStr` currently represents both plain and single-quoted scalars (see
-//! `src/parse/plain.rs`), so a style-exact comparison would produce false negatives unrelated to
-//! real conformance gaps. Alias resolution is instead handled entirely on the oracle side: while
+//! content, resolved tag), not *presentation* (flow vs. block style, or anchor names):
+//! `value::Node` doesn't carry that information today (its stated purpose is eventual
+//! serde/Construct-phase deserialization, not YAML round-tripping). Alias resolution is instead
+//! handled entirely on the oracle side: while
 //! parsing `test.event`, `=ALI` events are expanded against a locally built anchor→subtree map,
 //! mirroring `ya`'s own eager alias substitution in `src/parse/alias.rs`. So both sides end up as
 //! alias-free trees, and comparison stays meaningful for anchor/alias cases even though `ya`
@@ -465,7 +463,9 @@ fn standard_tag_uri(tag: value::StandardTag) -> &'static str {
 /// variants yet, so they're currently unreachable.
 fn scalar_value(scalar: &value::Scalar<'_>) -> String {
     match scalar {
-        value::Scalar::SingleStr(s) | value::Scalar::DoubleStr(s) => s.to_string(),
+        value::Scalar::Plain(s) | value::Scalar::SingleStr(s) | value::Scalar::DoubleStr(s) => {
+            s.to_string()
+        }
         value::Scalar::Null => String::new(),
         value::Scalar::Bool(b) => b.to_string(),
         value::Scalar::Int(i) => i.to_string(),
