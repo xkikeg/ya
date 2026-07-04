@@ -1,6 +1,6 @@
 use winnow::{
-    combinator::{alt, dispatch, opt, peek, preceded, repeat, trace},
-    token::any,
+    combinator::{alt, dispatch, eof, opt, peek, preceded, repeat, trace},
+    token::{any, take_while},
     Parser,
 };
 
@@ -164,6 +164,33 @@ where
     .parse_next(input)
 }
 
+/// Content forbidden from appearing at the start of a line within a bare document: a
+/// directives-end or document-end marker. Used to stop a multi-line plain scalar from swallowing
+/// such a line as if it were ordinary content.
+///
+/// https://yaml.org/spec/1.2.2/#rule-c-forbidden
+#[doc(alias = "c-forbidden")]
+pub fn forbidden<'i, Input, Error>(input: &mut Input) -> winnow::Result<(), Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "document::forbidden",
+        (
+            spaces::start_of_line,
+            alt(("---", "...")),
+            alt((
+                chars::line_break.void(),
+                take_while(1.., chars::is_white_space).void(),
+                eof.void(),
+            )),
+        )
+            .void(),
+    )
+    .parse_next(input)
+}
+
 /// Document suffix.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-l-document-suffix
@@ -246,6 +273,27 @@ mod tests {
                             Cow::Borrowed("bar")
                         ))),
                     }])
+                )))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
+    #[test]
+    fn simple_flow_seq_of_plain_scalars() {
+        let input = "[one, two]";
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::unspecified(Content::Seq(
+                    vec![
+                        Node::unspecified(Content::Scalar(value::Scalar::Plain(Cow::Borrowed(
+                            "one"
+                        )))),
+                        Node::unspecified(Content::Scalar(value::Scalar::Plain(Cow::Borrowed(
+                            "two"
+                        )))),
+                    ]
                 )))])
             ),
             testing::parse(yaml_stream, input).unwrap()

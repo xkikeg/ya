@@ -76,6 +76,13 @@ impl<'i> WithAnchorStore<'i> for Input<'i> {
 pub trait TrackStartOfLine {
     /// Returns `true` when the current position is at the beginning of the line.
     fn is_start_of_line(&self) -> bool;
+
+    /// Returns the character right before the current position, or `None` at the start of input.
+    ///
+    /// Used to implement the `[lookbehind = ns-char] '#'` alternative of
+    /// [`ns-plain-char`](https://yaml.org/spec/1.2.2/#rule-ns-plain-char), since winnow has no
+    /// built-in lookbehind support.
+    fn previous_char(&self) -> Option<char>;
 }
 
 impl<'i> TrackStartOfLine for Input<'i> {
@@ -86,6 +93,11 @@ impl<'i> TrackStartOfLine for Input<'i> {
             // Given str is UTF-8, ASCII can be compared literally.
             i => self.original.as_bytes()[i - 1] == b'\n',
         }
+    }
+
+    fn previous_char(&self) -> Option<char> {
+        use stream::Location as _;
+        self.original[..self.inner.previous_token_end()].chars().next_back()
     }
 }
 
@@ -236,6 +248,10 @@ where
 impl<I: TrackStartOfLine> TrackStartOfLine for WithLimit<I> {
     fn is_start_of_line(&self) -> bool {
         self.inner.is_start_of_line()
+    }
+
+    fn previous_char(&self) -> Option<char> {
+        self.inner.previous_char()
     }
 }
 
