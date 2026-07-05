@@ -64,12 +64,15 @@ src/
       map.rs              c-flow-mapping and its entries (explicit/implicit/yaml-key/json-key)
       pair.rs             ns-flow-pair (used for flow-sequence "single pair" shorthand entries)
     block/
-      header.rs           c-chomping-indicator only so far (block header is otherwise unimplemented)
-      scalar.rs           s-l+block-scalar (STUB, see below)
-      seq.rs               l+block-sequence / c-l-block-seq-entry
-      map.rs               l+block-mapping (STUB block_map_entry, see below)
-      node.rs             s-l+block-node / s-l+block-in-block (STUB) / s-l+flow-in-block (done) /
-                          s-l+block-indented (STUB)
+      header.rs           block header: chomping/indentation indicators, auto-detected indentation
+      literal.rs           c-l+literal (block literal scalar `|`)
+      folded.rs            c-l+folded (block folded scalar `>`)
+      scalar.rs           s-l+block-scalar (header + literal/folded + properties -> Node)
+      seq.rs               l+block-sequence / c-l-block-seq-entry / ns-l-compact-sequence
+      map.rs               l+block-mapping / ns-l-block-map-entry (explicit & implicit) /
+                          ns-l-compact-mapping
+      node.rs             s-l+block-node / s-l+block-in-block / s-l+block-collection /
+                          s-l+flow-in-block / s-l+block-indented (all done)
     testing.rs (test-only) parse-helper wrapping winnow's `.parse()` for use in unit tests
 ```
 
@@ -106,19 +109,20 @@ Roughly implemented and unit-tested:
   auto-detected content indentation (`block/header.rs::detect_indentation`), folded-line vs.
   more-indented-line handling, and trailing comment lines. Produces the new `value::Scalar::Literal`
   / `Scalar::Folded` variants (both always resolve to `str`, like the quoted styles).
-  `block/scalar.rs::block_scalar` ties header + content together and is fully unit-tested, but is
-  not yet reachable from real documents -- that requires Phase 4's `block_in_block` to dispatch to
-  it. See Phase 3 below (now complete).
+  `block/scalar.rs::block_scalar` ties header + content together, now also parses its own
+  `c-ns-properties` and returns a full `Node` (not just a bare `Scalar`), and is reachable from real
+  documents via `block_in_block`. See Phase 3 below (now complete).
+- Block collections (`block/seq.rs`, `block/map.rs`, `block/node.rs`): block sequences and block
+  mappings, both explicit (`? key` / `: value`) and implicit (`key: value`) entries, compact
+  notation (`- - a`, `- key: value`), and `seq-space(n,c)` (a sequence value may align with its own
+  mapping key's indentation). `block_node`/`block_in_block`/`block_indented` tie flow-in-block,
+  block scalars, and block collections together into one recursive entry point, reachable from
+  `document.rs::bare_document`. See Phase 4 below (now complete).
 
 Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
 `cargo build` warning-free pass would still leave semantically incomplete:
 - Directives (`%YAML`, `%TAG`, reserved directives) -- `document.rs::directive_document` is `fail`.
 - Explicit documents (`--- ... ...`) -- `document.rs::explicit_document` is `fail`.
-- Block mapping entries -- `block/map.rs::block_map_entry` is `fail`, so `block_mapping` cannot
-  actually produce a mapping yet even though its outer loop/indent logic is written.
-- `block/node.rs::block_in_block` (dispatches to block sequence/mapping/scalar by lookahead) and
-  `block_indented` (content of a `-` sequence entry, including compact notation) are both `fail`.
-  `flow_in_block` (the flow-node-inside-a-block-context case) *is* implemented.
 - Tag resolution / Core Schema (turning an unspecified-tag plain scalar into `Null`/`Bool`/`Int`/
   `Float`/string per the core schema) is deferred by design (see comment in `plain.rs::plain`) but
   nothing implements that later stage yet either.
@@ -152,8 +156,10 @@ Not implemented (stub returns `fail`, or missing outright) -- these are exactly 
   The existing code breaks each cycle by constructing sub-parsers *inside* a
   `move |input: &mut Input| { ... child(...).parse_next(input) }` closure body (see
   `flow/map.rs::flow_map_entries`, `single.rs::non_break_single_multi_line`). Block collections
-  (Phase 4) have the same cycle shape (`block_node` → `block_in_block` → `block_sequence` →
-  `block_indented` → `block_node`) and need at least one such closure in the loop.
+  turned out to have *two independent* cycles, not one -- see Phase 4's writeup below for the one
+  that isn't visually obvious from the spec composition (`block_map_implicit_value` → `block_node`
+  directly, never passing through `block_indented`'s own closure). **When adding a new recursive
+  rule, trace the whole call graph for cycles, not just the one the grammar's shape suggests.**
 - winnow 1.0 idioms already in use, for reference when transcribing new rules: `alt`, `dispatch!`,
   `repeat` (note: `repeat(0.., p).map(|()| ())` to pick the `()` accumulator), `opt`, `preceded` /
   `terminated` / `delimited`, `peek`, `not` (peeks; succeeds at EOF), `empty.value(x)` (for `e-node`),
@@ -454,62 +460,103 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       documents (see 3f); no regressions (`StructuralMismatch`/`ParserPanic`/
       `UnexpectedSuccessOnErrorCase` all still 0, `ContentMismatch` still 2).
 
-### Phase 4 -- Block collections (biggest conformance jump; needs Phases 1 & 3, property slot from 2)
+### Phase 4 -- Block collections (biggest conformance jump; needs Phases 1 & 3, property slot from 2) -- DONE
 
-- [ ] **4a. Prerequisite signature fix.** `block_seq_entry` / `block_sequence` / `block_indented`
-      return `Content` / `Vec<Content>` today (`block/seq.rs:25,47`, `block/node.rs:84`), but
-      sequence items are `Node`s (`value::Content::Seq(Vec<Node>)`) and entries can carry
-      properties/anchors. Change all three to produce `Node<'i>` / `Vec<Node<'i>>` (wrap
-      property-less compact collections with `Node::unspecified`).
-- [ ] **4b.** Land the Phase 0 `block/seq.rs` inverted-lookahead fix and the `key.rs` `opt()` fix
-      here at the latest.
-- [ ] **4c. `block/map.rs::block_map_entry`**
-      ([`ns-l-block-map-entry`](https://yaml.org/spec/1.2.2/#rule-ns-l-block-map-entry)):
-      `alt((block_map_explicit_entry(n), block_map_implicit_entry(n)))`, with:
-      - `block_map_explicit_entry(n)`: `(block_map_explicit_key(n), alt((block_map_explicit_value(n), e_node)))`;
-        key = `preceded('?', block_indented(BlockOut, n))` (bare `?` works because
-        `block_indented`'s e-node arm matches empty); value = `preceded((spaces::indent(n), ':'), block_indented(BlockOut, n))`.
-      - `block_map_implicit_entry(n)`: `(alt((block_map_implicit_key, e_node)), block_map_implicit_value(n))`;
-        implicit key (`ns-s-block-map-implicit-key`) =
-        `alt((key::implicit_json_key(BlockKey), key::implicit_yaml_key(BlockKey)))` -- these already
-        exist (`key.rs:19,53`) including the 1024-char cap and the (post-4b optional) trailing
-        in-line separation.
-      - `block_map_implicit_value(n)` (`c-l-block-map-implicit-value`):
-        `preceded(':', alt((block_node(BlockOut, n), terminated(e_node, spaces::line_comments))))`.
-      - `e_node` helper: `empty.value(Node::unspecified(Content::Empty))` (pattern at
-        `flow/map.rs:119`).
-      - Reassurance for a scary-looking case: `key:value` (no space) correctly parses as *one plain
-        scalar*, not a map -- that's real YAML 1.2 behavior, the `:`+plain-safe arm of
-        `ns-plain-char` handles it.
-- [ ] **4d. `block/node.rs::block_indented`**
-      ([`s-l+block-indented(n,c)`](https://yaml.org/spec/1.2.2/#rule-s-l+block-indented)):
-      `alt((compact_arm, block_node(context, n), (e_node, line_comments)))` where `compact_arm`
-      consumes `s-indent(m)` for arbitrary `m ≥ 0` (`take_while(0.., ' ')`, `m` = consumed length;
-      `alt` backtracks it if the compact parse fails) then
-      `alt((compact_sequence(n'), compact_mapping(n')))` at `n' = indent_level + (m + 1)`
-      (`IndentLevel: Add<usize>` exists, `spaces.rs:54`; spec's `n+1+m`).
-      **This is the recursion cycle** (`block_indented` → `block_node` → ... → `block_indented`):
-      write at least this function as a hand-rolled closure constructing children lazily (see the
-      convention bullet above), or the parser value cannot be built.
-- [ ] **4e. `ns-l-compact-sequence(n)` / `ns-l-compact-mapping(n)`** (new fns in `block/seq.rs` /
-      `block/map.rs`): `(entry(n), repeat(0.., preceded(spaces::indent(n), entry(n))))` → wrap as
-      `Content::Seq` / `Content::Map`.
-- [ ] **4f. `block/node.rs::block_in_block`**
-      ([`s-l+block-in-block`](https://yaml.org/spec/1.2.2/#rule-s-l+block-in-block)):
-      `alt((block_scalar_arm, block_collection(context, n)))`. The scalar arm wraps Phase 3's
-      `block_scalar` into a `Node`.
-      `block_collection` ([`s-l+block-collection(n,c)`](https://yaml.org/spec/1.2.2/#rule-s-l+block-collection)),
-      transcribed exactly:
-      `(opt(preceded(separate(context, n+1), properties(n+1))) /* Phase 2 */, spaces::line_comments, alt((seq_space_arm, block_mapping(n))))`.
-      The `seq-space(n,c)` dispatch is context-dependent: BLOCK-OUT → `block_sequence(n.prev())`
-      (`IndentLevel::prev`, `spaces.rs:49`; the §8.2.2 "sequence under a mapping key may be at the
-      same indentation" rule), BLOCK-IN → `block_sequence(n)`. Model it the way every other
-      `c`-parameterized rule is modeled: a method on the `InOutBlock` trait (`context.rs:56`),
-      `#[doc(alias = "seq-space")]`, implemented by `BlockOut`/`BlockIn`.
-- [ ] **4g. Tests.** Spec [§8.2](https://yaml.org/spec/1.2.2/#82-block-collection-styles) examples
-      8.14–8.22 (sequences, entry variants, mappings, explicit/implicit entries, compact 8.19,
-      in-seq 8.20, in-block 8.22); end-to-end `document.rs` tests for `key: value\n` and
-      `- a\n- b\n`. Update the Phase 7 pass rate -- this phase should move it the most.
+- [x] **4a. Prerequisite signature fix.** `block_seq_entry` / `block_sequence` / `block_indented`
+      now produce `Node<'i>` / `Vec<Node<'i>>` (`block/seq.rs`, `block/node.rs`) instead of
+      `Content` / `Vec<Content>`; property-less compact collections wrap with `Node::unspecified`.
+      `block_scalar` (Phase 3) was widened the same way, from `Scalar<'i>` to `Node<'i>` -- see 4f.
+- [x] **4b.** The Phase 0 `block/seq.rs` inverted-lookahead fix and the `key.rs` `opt()` fix had
+      already landed by the time this phase started (both checked off in Phase 0 above).
+- [x] **4c. `block/map.rs::block_map_entry`** implemented as planned:
+      `alt((block_map_explicit_entry(n), block_map_implicit_entry(n)))`, with
+      `block_map_explicit_key`/`block_map_explicit_value` wrapping `block_indented(BlockOut, n)`,
+      and `block_map_implicit_key` = `alt((key::implicit_json_key(BlockKey),
+      key::implicit_yaml_key(BlockKey)))`. `e_node` (`empty.value(Node::unspecified(Content::Empty))`)
+      landed in `block/node.rs` (`pub(super)`, so `block::map`/`block::seq` can reuse it) rather than
+      `flow/map.rs`'s copy. **Deviation from the plan**: `block_map_implicit_value` (`c-l-block-map-
+      implicit-value`) had to become its own hand-rolled closure -- see 4d's recursion note, this
+      function turned out to sit on a *second*, independent recursion cycle back to `block_node`
+      that the planned `block_indented` closure alone doesn't cover.
+- [x] **4d. `block/node.rs::block_indented`** implemented per plan:
+      `alt((compact_notation(n), block_node(context, n), terminated(e_node, line_comments)))`,
+      `compact_notation` consuming `s-indent(m)` for arbitrary `m` then dispatching to
+      `compact_sequence`/`compact_mapping` at `n' = indent_level + (m + 1)`.
+      **The recursion turned out to have two independent cycles, not one.** The planned one
+      (`block_indented` → `compact_notation` → `compact_sequence`/`compact_mapping` →
+      `block_seq_entry`/`block_map_entry` → `block_indented` again, e.g. for `- - a` / `- a: b`) is
+      broken by making `block_indented` itself the hand-rolled closure, exactly as planned. But a
+      *second*, disjoint cycle exists that never passes through `block_indented` at all:
+      `block_node` → `block_in_block` → `block_collection` → `block_mapping` → `block_map_entry` →
+      `block_map_implicit_entry` → `block_map_implicit_value` → `block_node` again (an ordinary
+      `key: value` mapping entry, no compact notation involved). Missing this second closure is a
+      quiet failure mode: the code *compiles* (opaque-type resolution doesn't require passing
+      through the missing closure to terminate) but is unboundedly self-referential in a way that
+      only some particular reasoning about closures-vs-plain-combinators catches ahead of time; it
+      was caught here by construction rather than by a compile error, so a future recursive rule
+      addition should re-derive the *whole* call graph's cycles, not just the one the spec
+      composition makes visually obvious. Fixed by also making `block_map_implicit_value` (in
+      `block/map.rs`) a hand-rolled closure.
+- [x] **4e. `ns-l-compact-sequence(n)` / `ns-l-compact-mapping(n)`** landed in `block/seq.rs` /
+      `block/map.rs` exactly as planned.
+- [x] **4f. `block/node.rs::block_in_block`**: `alt((scalar::block_scalar(context, n),
+      block_collection(context, n)))`. Per the plan, `block_scalar` itself now parses
+      `c-ns-properties(n+1,c)` directly (deferred from Phase 3) and returns `Node<'i>`, so the
+      "scalar arm" needed no extra wrapping. `block_collection` transcribes
+      `s-l+block-collection(n,c)` as planned, hand-rolled as a closure (needed regardless of
+      recursion, to imperatively register the optional anchor via the shared `properties::build_node`
+      helper -- see below). `seq-space(n,c)` landed as `InOutBlock::seq_space` exactly as planned
+      (`BlockIn` → identity, `BlockOut` → `.prev()`).
+      **Refactor bundled in**: `flow/node.rs`'s private `build_node` (tag resolution + anchor
+      registration) moved to `properties::build_node` (`pub(super)`, i.e. visible to all of
+      `parse::*`) so `block_scalar` and `block_collection` could reuse it instead of duplicating
+      the resolve-tag/register-anchor dance a third and fourth time.
+- [x] **4g. Tests.** Colocated unit tests transcribing spec examples 8.14 (`block/seq.rs`), 8.16,
+      8.17, 8.19 (`block/map.rs`), plus one end-to-end `document.rs` test for the full example 8.14
+      (mapping-of-sequence-of-mapping, exercising `seq-space` and full document dispatch --
+      something the function-level tests can't cover on their own). Simpler `key: value\n` /
+      `- a\n- b\n` end-to-end cases were deliberately *not* added at the document level, per review
+      feedback on the first version of this change: they're already fully covered by the
+      block-sequence/block-mapping-level tests, so a redundant document-level copy would just be
+      extra maintenance surface. All nine yaml-test-suite corpus cases tagged with spec examples
+      8.14-8.22 (`JQ4R`, `W42U`, `TE2A`, `5WE3`, `S3PD`, `V9D5`, `735Y`, `M5C3`, `57H4`) now pass
+      under the strict harness. Conformance report: 132/402 (32.8%) → **280/402 (69.7%)**, by far
+      the largest jump of any phase so far, as predicted.
+
+**Bugs found and fixed along the way** (all were latent, pre-existing gaps that Phase 4 was simply
+the first phase to reach at runtime -- none are new mistakes introduced by this phase's own new
+code, but all were blockers for it):
+- **`spaces::line_comments` (`s-l-comments`) didn't implement "zero or more" correctly.** Its
+  hand-rolled loop (written to dodge the Phase-0-style "`repeat` must always consume" trap) called
+  `line_comment` and propagated *any* failure with `?`, instead of treating a failed match as "stop
+  the loop, there are zero further comment lines" the way `l-comment*` requires. This is harmless
+  for a single flow-only document (the only shape exercised before Phase 4) but breaks *every*
+  multi-entry block collection: after parsing one entry's value, `flow_in_block`'s trailing
+  `line_comments` call would try to consume the next entry's line as a would-be comment, fail, and
+  propagate that failure instead of gracefully leaving it for the next entry to parse. Fixed by
+  checkpointing before the trailing-comment attempt and resetting on a backtrackable failure.
+- **`spaces::indent_less_than` used `Error::assert` (a debug-mode `panic!`) for `n<=0`,** on the
+  reasoning that "less than zero spaces" should never be reachable. It is reachable: a block
+  scalar's auto-detected content indentation can legitimately be 0 (e.g. a root-level literal/folded
+  scalar), and its trailing-empty-lines handling (`l-trail-comments`, always wrapped in `opt(...)`)
+  calls this function unconditionally. Fixed by returning an ordinary backtrackable error instead of
+  panicking -- both call sites already handle that gracefully (`line_empty`'s `line_prefix` fallback
+  never actually needs it at `n=0`; `l-trail-comments`'s `opt(...)` wrapper treats it as "no trailing
+  comment").
+- **`block/header.rs::detect_indentation` was unbounded**, exactly as flagged as a known limitation
+  when Phase 3 landed it: a block scalar with no content of its own, followed immediately by a
+  sibling at or below its own indentation (e.g. yaml-test-suite `K858`'s `strip: >-` immediately
+  followed by `clip: >` at column 0), would misread that sibling's line as its own auto-detected
+  content indentation and swallow it. Fixing this needed two changes, not one: (1) bound the
+  forward scan by the scalar's own indentation level `n`, so a non-empty candidate line indented at
+  or below `n` no longer counts as content; (2) *also* teach `literal_content`/`folded_content` (via
+  a new `DetectedIndentation { content: Option<IndentLevel>, bound: IndentLevel }` return type) to
+  skip the text-line-matching phase entirely when there's no content, rather than attempting it at
+  a computed level that can itself be a degenerate `s-indent(0)` (which matches trivially,
+  consuming zero spaces unconditionally, and so would swallow the sibling line anyway even knowing
+  "there's no content" if the matching phase were still attempted). The `bound` field is still
+  needed even in the no-content case, to correctly recognize deeply-indented blank lines as blank
+  during the trailing chomping phase.
 
 ### Phase 5 -- Directives & explicit/full documents
 
@@ -635,15 +682,25 @@ range/representation policy lives at the conversion site, not in the value model
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: ~132/402 (32.8%)** -- Phase 2 (node properties/anchors)
+      `cargo test`. **Current pass rate: 280/402 (69.7%)** -- Phase 2 (node properties/anchors)
       held flat at 129/402, since those mostly unlock cases that also need block collections
       (Phase 4) to reach content using them. Phase 3 (block scalars) nudged it to 132/402; block
-      scalars themselves aren't reachable from real documents yet either (same Phase 4 dependency),
+      scalars themselves weren't reachable from real documents yet either (same Phase 4 dependency),
       but fixing a latent `chars::is_non_break` bug along the way (it excluded space, breaking any
-      multi-word comment) unlocked a few flow-style cases with comments. No regressions in either
-      phase (`StructuralMismatch`/`ParserPanic`/`UnexpectedSuccessOnErrorCase` all still 0,
-      `ContentMismatch` still 2). Update this number whenever a phase lands. The real bugs this
-      harness surfaced are now tracked as Phase 0 above.
+      multi-word comment) unlocked a few flow-style cases with comments. **Phase 4 (block
+      collections) jumped it to 280/402 (69.7%)**, by far the largest single-phase gain -- block
+      collections are most of real-world YAML, and landing them also finally exercised (and
+      surfaced latent bugs in) the block-scalar and comment-handling machinery from earlier phases;
+      see Phase 4's own writeup above for the three pre-existing bugs this uncovered
+      (`spaces::line_comments`, `spaces::indent_less_than`, `detect_indentation`). Remaining
+      failures are almost entirely `ParseErrorOnValidCase` (112, from directives/explicit documents
+      -- Phase 5 -- and a handful of other unimplemented corners), plus 10 known, out-of-scope
+      mismatches: 5 `StructuralMismatch` in flow-mapping edge cases with entirely-empty flow content
+      (e.g. `{}`-shaped nodes), and 5 `ContentMismatch` -- 3 are the harness not yet surfacing
+      `Tag::NonSpecific` as tag text `"!"` (a Phase 6 harness/tag-resolution concern), 2 are
+      double-quoted-scalar trailing-whitespace edge cases pre-dating this phase. `ParserPanic` and
+      `UnexpectedSuccessOnErrorCase` are both 0. Update this number whenever a phase lands. The real
+      bugs this harness surfaced are now tracked as Phase 0 (and Phase 4) above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 
 ### Phase 8 -- Polish (do last, or opportunistically)

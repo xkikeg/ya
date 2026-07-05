@@ -6,11 +6,13 @@ use std::borrow::Cow;
 
 use winnow::{
     combinator::{alt, delimited, opt, preceded, repeat, trace},
+    error::{StrContext, StrContextValue},
+    stream::Stream,
     token::{one_of, take_while},
     Parser,
 };
 
-use crate::value;
+use crate::value::{self, Content, Node};
 
 use super::{
     chars,
@@ -266,6 +268,39 @@ pub(super) fn resolve_tag<'i>(
             Some(value::Tag::Global(Cow::Owned(format!("{prefix}{suffix}"))))
         }
     }
+}
+
+/// Resolves the (optional) tag property against the parse-time tag-handle map, builds the
+/// `Node`, and registers its anchor (if any) so later aliases can resolve it.
+///
+/// Shared by every node-constructing rule that carries `c-ns-properties` (flow and block nodes
+/// alike): [`super::flow::node::flow_node`] & co., and block collections/scalars.
+pub(super) fn build_node<'i, Input, Error>(
+    input: &mut Input,
+    start: &<Input as Stream>::Checkpoint,
+    anchor: Option<&'i str>,
+    tag: Option<TagProperty<'i>>,
+    content: Content<'i>,
+) -> winnow::Result<Node<'i>, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    let tag = match tag {
+        None => value::Tag::Unspecified,
+        Some(prop) => resolve_tag(input.tag_handles(), prop).ok_or_else(|| {
+            Error::from_input(input).add_context(
+                input,
+                start,
+                StrContext::Expected(StrContextValue::Description("a declared tag handle")),
+            )
+        })?,
+    };
+    let node = Node::new(content, tag);
+    if let Some(name) = anchor {
+        input.anchor_store_mut().put(name.to_string(), node.clone());
+    }
+    Ok(node)
 }
 
 #[cfg(test)]
