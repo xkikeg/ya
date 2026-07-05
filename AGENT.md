@@ -546,25 +546,69 @@ in-line loop) trades away spec shape and should be a maintainer decision.
 
 ### Phase 6 -- Tag resolution / Core Schema
 
+**Design decision (maintainer-approved 2026-07-05): resolution is *tag-only*, and the native
+`Scalar::Null`/`Bool(bool)`/`Int(i64)`/`Float(f64)` variants have been deleted from
+`value::Scalar` (along with the harness's placeholder match arms in
+`tests/integration_tests.rs::scalar_value`).** `Scalar` is purely textual (the five style
+variants, each `Cow<'i, str>`); `resolve()` only rewrites `Node::tag`
+(`Tag::Unspecified`/`Tag::NonSpecific` → `Tag::Standard(...)`), never the scalar content.
+**Construction phase (how natives are obtained later)**: typed accessors on `Node` interpreting
+`(tag, text)` on demand (6e), and on top of those the Phase 8 serde `Deserialize` layer -- both
+parse the retained lexeme against the caller's requested type at conversion time, so numeric
+range/representation policy lives at the conversion site, not in the value model. Rationale:
+
+- It matches the spec's own processing model: representation nodes carry *text* plus a tag;
+  native data structures exist only in the Construct phase
+  ([§3.1.2](https://yaml.org/spec/1.2.2/#312-construct)), which for this crate is the planned
+  serde/accessor layer, not the parse output.
+- Rewriting is lossy. Once `Plain("0x1A")` becomes `Int(26)`, the source lexeme is gone: the
+  stream can't be re-resolved under a different schema (failsafe/JSON/core per §10.1–10.3, or a
+  future custom schema -- resolution becomes a cheap re-runnable function of the retained text),
+  and error messages can't quote what the user wrote (`~` vs `null`, `1e3` vs `1000.0`).
+- The conformance harness *cannot* work with retyped scalars: `test.event` records scalar text
+  verbatim, so `Plain("1e3")` → `Float(1000.0)` → `"1000"` would *introduce* `ContentMismatch`
+  failures in 6d instead of clearing them. (The harness's `scalar_value` NOTE used to document
+  this exact hazard; its four placeholder match arms were the only code touching the native
+  variants, and were removed with them.)
+- It removes redundant/illegal states: today `Tag::Standard(Bool)` + `Scalar::Int(3)` is
+  representable. With tag-only resolution the tag is the single source of truth for kind and the
+  text the single source of content.
+- It dissolves open design question 3 (int overflow): an arbitrarily large `!!int` stays
+  representable as tagged text; overflow becomes a conversion-time error surfaced by the accessor
+  or serde layer against the integer type the *caller* asked for, which is the semantics serde
+  users expect anyway.
+
 - [ ] **6a. New `src/resolve.rs` post-pass** (post-pass keeps parsing schema-agnostic, consistent
       with the deferral comment in `plain.rs::plain`): `pub fn resolve(Stream) -> Result<Stream, ResolveError>`
-      walking every node. `Tag::Unspecified` + `Scalar::Plain` → core-schema match (6b), rewriting
-      the scalar to `Null`/`Bool(_)`/`Int(_)`/`Float(_)` and the tag to `Tag::Standard(...)`;
-      `Unspecified` + any other scalar style (single/double/literal/folded) → `Standard(Str)`,
-      content untouched; `Unspecified` collections → `Standard(Map)`/`Standard(Seq)`;
-      `Tag::NonSpecific` → str/map/seq by node kind.
+      walking every node and rewriting *tags only* (see design note above; scalar content is
+      untouched in every arm). `Tag::Unspecified` + `Scalar::Plain` → core-schema match (6b) →
+      `Tag::Standard(Null|Bool|Int|Float)` or `Standard(Str)` on no match;
+      `Unspecified` + any other scalar style (single/double/literal/folded) → `Standard(Str)`;
+      `Unspecified` collections → `Standard(Map)`/`Standard(Seq)`;
+      `Tag::NonSpecific` → str/map/seq by node kind. (The four native `Scalar` variants and the
+      harness's placeholder match arms were already deleted when this design was decided.)
 - [ ] **6b. Core-schema matchers** ([§10.3.2](https://yaml.org/spec/1.2.2/#1032-tag-resolution)),
-      hand-written (no `regex` dependency): null `null|Null|NULL|~|<empty>`; bool
+      hand-written (no `regex` dependency), classifying text → `StandardTag` (not constructing
+      values): null `null|Null|NULL|~|<empty>`; bool
       `true|True|TRUE|false|False|FALSE`; int `[-+]? [0-9]+`, `0o[0-7]+`, `0x[0-9a-fA-F]+`; float
       `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?`, `[-+]? \.(inf|Inf|INF)`,
-      `\.(nan|NaN|NAN)`. Int overflow past `i64` is an open policy question (see below) --
-      **escalate before picking**.
+      `\.(nan|NaN|NAN)`. (Under tag-only resolution these are pure classifiers; `i64` range is
+      irrelevant here -- see 6e for where overflow policy now lives.)
 - [ ] **6c. Explicit standard tags**: map `tag:yaml.org,2002:{str,null,bool,int,float,map,seq}`
-      `Tag::Global` values to `Tag::Standard` + forced reinterpretation of the scalar content,
-      erroring when content doesn't match the forced tag (e.g. `!!int foo`).
+      `Tag::Global` values to `Tag::Standard`, *validating* (via the 6b classifiers) that the
+      content is well-formed for the forced tag and erroring when it isn't (e.g. `!!int foo`);
+      content itself stays untouched.
 - [ ] **6d. Harness**: call `resolve()` in `tests/integration_tests.rs` before the `ExpectedNode`
-      comparison; this should clear most remaining `ContentMismatch` failures.
-- [ ] **6e. Tests**: the §10.3.2 resolution table and example 10.9 verbatim.
+      comparison; this should clear most remaining `ContentMismatch` failures. (Text-vs-text
+      comparison keeps working unchanged because resolution no longer rewrites content.)
+- [ ] **6e. Construct-phase accessors**: `Node::as_str()` / `as_bool()` / `as_i64()` / `is_null()`
+      etc., interpreting `(Tag::Standard(..), text)` on demand (e.g. `as_i64` parses decimal/octal/
+      hex per the matched int form). This is where the old open-question-3 overflow policy lands:
+      `as_i64` returns `None`/error on overflow while the node itself stays valid; a serde
+      `Deserialize` impl (Phase 8) gets the same behavior per requested type for free.
+- [ ] **6f. Tests**: the §10.3.2 resolution table and example 10.9 verbatim, plus accessor
+      round-trips for each int form (`0o7`, `0x1A`, `-12`) and an `i64`-overflow case asserting
+      the node survives and only the conversion fails.
 
 ### Phase 7 -- Conformance harness
 
@@ -630,5 +674,9 @@ Do not resolve these unilaterally; raise them when the phase that hits them star
 2. **Scalar style variants in `value::Scalar`**: the plan adds `Plain` (1h), `Literal`/`Folded`
    (3e) and `Tag::NonSpecific` (2c). Alternative: one string variant + a separate `style` field.
    Confirm the variant approach before Phase 1 lands it.
-3. **Core-schema int overflow** (6b): `Scalar::Int(i64)` can't hold arbitrary YAML ints. Fall back
-   to `Float`? Keep as `Str`? Error? Add `u64`/`i128` variants? Pick before Phase 6.
+3. **Core-schema int overflow** (6b): ~~`Scalar::Int(i64)` can't hold arbitrary YAML ints. Fall
+   back to `Float`? Keep as `Str`? Error? Add `u64`/`i128` variants? Pick before Phase 6.~~
+   *Resolved by the Phase 6 tag-only-resolution decision (maintainer-approved 2026-07-05)*: since
+   `resolve()` never rewrites scalar content, arbitrarily large ints remain representable as
+   `Tag::Standard(Int)` + text, and overflow becomes a per-conversion error in the 6e accessors /
+   Phase 8 serde layer against whatever integer type the caller requests.
