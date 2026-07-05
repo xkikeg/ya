@@ -96,6 +96,10 @@ pub enum Scalar<'i> {
     Plain(Cow<'i, str>),
     SingleStr(Cow<'i, str>),
     DoubleStr(Cow<'i, str>),
+    /// A literal-style (`|`) block scalar. Always resolves to a string, like the quoted styles.
+    Literal(Cow<'i, str>),
+    /// A folded-style (`>`) block scalar. Always resolves to a string, like the quoted styles.
+    Folded(Cow<'i, str>),
     Null,
     Bool(bool),
     Int(i64),

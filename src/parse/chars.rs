@@ -18,10 +18,15 @@ pub const BOM: char = '\u{feff}';
 
 /// non-break chars.
 ///
+/// `nb-char` is `c-printable` minus line breaks and the byte-order mark, which per
+/// [`c-printable`](https://yaml.org/spec/1.2.2/#rule-c-printable) includes the whole ASCII
+/// printable range `x20-x7E` -- notably space (`x20`), which `char::is_ascii_graphic` excludes
+/// (it only covers `x21-x7E`). Use `is_ascii() && !is_ascii_control()` instead to include it.
+///
 /// https://yaml.org/spec/1.2.2/#rule-nb-char
 #[inline]
 pub fn is_non_break(c: char) -> bool {
-    c == '\t' || c.is_ascii_graphic() || (!c.is_ascii() && !c.is_control())
+    c == '\t' || (c.is_ascii() && !c.is_ascii_control()) || (!c.is_ascii() && !c.is_control())
 }
 
 /// non-break non-space chars.

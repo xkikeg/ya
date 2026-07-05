@@ -467,9 +467,11 @@ fn standard_tag_uri(tag: value::StandardTag) -> &'static str {
 /// variants yet, so they're currently unreachable.
 fn scalar_value(scalar: &value::Scalar<'_>) -> String {
     match scalar {
-        value::Scalar::Plain(s) | value::Scalar::SingleStr(s) | value::Scalar::DoubleStr(s) => {
-            s.to_string()
-        }
+        value::Scalar::Plain(s)
+        | value::Scalar::SingleStr(s)
+        | value::Scalar::DoubleStr(s)
+        | value::Scalar::Literal(s)
+        | value::Scalar::Folded(s) => s.to_string(),
         value::Scalar::Null => String::new(),
         value::Scalar::Bool(b) => b.to_string(),
         value::Scalar::Int(i) => i.to_string(),

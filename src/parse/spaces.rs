@@ -122,6 +122,24 @@ where
     })
 }
 
+/// Parses the indent with level less than or equal to `indent_level`.
+/// Used as `s-indent-less-or-equal(n)`, e.g. by [block chomping](https://yaml.org/spec/1.2.2/#rule-l-strip-empty).
+///
+/// https://yaml.org/spec/1.2.2/#rule-s-indent-less-or-equal
+#[doc(alias = "s-indent-less-or-equal")]
+pub fn indent_less_or_equal<'i, Input, Error>(
+    indent_level: IndentLevel,
+) -> impl Parser<Input, (), Error> + use<'i, Input, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "spaces::indent_less_or_equal",
+        take_while(..=indent_level.get(), b" ").void(),
+    )
+}
+
 /// Parses separate of elements.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-s-separate
