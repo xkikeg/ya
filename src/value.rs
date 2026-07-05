@@ -57,8 +57,14 @@ impl<'i> Node<'i> {
 /// Tag of the YAML node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tag<'i> {
+    /// No tag property was given; eligible for core-schema resolution based on node kind and
+    /// scalar style (e.g. a plain scalar `12` resolves to an int, but `"12"` stays a string).
     Unspecified,
-    // TODO: should we have non-specific tags (?, !) or it must be resolved already?
+    /// The tag property was explicitly set to the non-specific tag `!`
+    /// ([`c-non-specific-tag`](https://yaml.org/spec/1.2.2/#rule-c-non-specific-tag)). Unlike
+    /// `Unspecified`, this disables schema resolution: the node is forced to
+    /// `tag:yaml.org,2002:{str,map,seq}` according to its kind, regardless of content.
+    NonSpecific,
     Global(Cow<'i, str>),
     Standard(StandardTag),
 }

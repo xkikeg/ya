@@ -436,6 +436,10 @@ fn node_to_expected(node: &value::Node<'_>) -> ExpectedNode {
 fn tag_uri(tag: &value::Tag<'_>) -> Option<String> {
     match tag {
         value::Tag::Unspecified => None,
+        // Resolving `!` to `tag:yaml.org,2002:{str,map,seq}` by node kind is AGENT.md Phase 6
+        // (Core Schema) work; until then, treat it like `Unspecified` so cases exercising it
+        // report as a content mismatch rather than failing to compile.
+        value::Tag::NonSpecific => None,
         value::Tag::Global(s) => Some(s.to_string()),
         value::Tag::Standard(t) => Some(standard_tag_uri(*t).to_string()),
     }
