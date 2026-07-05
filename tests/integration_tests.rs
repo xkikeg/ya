@@ -459,12 +459,9 @@ fn standard_tag_uri(tag: value::StandardTag) -> &'static str {
 
 /// Extracts scalar content only (style is deliberately not compared, see module docs).
 ///
-/// NOTE: once core-schema resolution (AGENT.md Phase 6) starts actually producing
-/// `Null`/`Bool`/`Int`/`Float`, exact event-content comparison for those will need the original
-/// source text preserved somewhere -- `test.event` records presentation text verbatim (e.g. `~`
-/// stays `~`, not a canonicalized `null`), which a resolved-and-retyped scalar can't reproduce.
-/// These branches are forward-compatible placeholders; `ya`'s parser doesn't produce these
-/// variants yet, so they're currently unreachable.
+/// `value::Scalar` is purely textual by design (tag resolution rewrites tags only, never
+/// content -- see AGENT.md Phase 6), so this is always the verbatim scalar text, which is exactly
+/// what `test.event` records.
 fn scalar_value(scalar: &value::Scalar<'_>) -> String {
     match scalar {
         value::Scalar::Plain(s)
@@ -472,10 +469,6 @@ fn scalar_value(scalar: &value::Scalar<'_>) -> String {
         | value::Scalar::DoubleStr(s)
         | value::Scalar::Literal(s)
         | value::Scalar::Folded(s) => s.to_string(),
-        value::Scalar::Null => String::new(),
-        value::Scalar::Bool(b) => b.to_string(),
-        value::Scalar::Int(i) => i.to_string(),
-        value::Scalar::Float(f) => f.to_string(),
     }
 }
 
