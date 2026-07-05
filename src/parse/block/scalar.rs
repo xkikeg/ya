@@ -1,5 +1,5 @@
 use winnow::{
-    combinator::{preceded, trace},
+    combinator::{alt, preceded, trace},
     Parser,
 };
 
@@ -12,6 +12,8 @@ use crate::{
     },
     value::Scalar,
 };
+
+use super::{folded, literal};
 
 /// Block scalar.
 ///
@@ -27,13 +29,43 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "block::content::block_scalar",
+        "block::scalar::block_scalar",
         preceded(
             spaces::separate(context, indent_level + 1),
-            // TODO fixme support properties
-            // (c-ns-properties(n+1, c) s-separate(n+1,c))?
-            // TODO implement this
-            winnow::combinator::fail,
+            // TODO(Phase 4): properties (c-ns-properties(n+1,c) s-separate(n+1,c))? here. Wiring
+            // them in requires `block_scalar` to return a `Node` (carrying the anchor/tag)
+            // instead of a bare `Scalar` -- that signature change is bundled into Phase 4a's
+            // wider Content -> Node migration for block constructs, so it's deferred there
+            // rather than done piecemeal here.
+            alt((
+                literal::literal(indent_level).map(Scalar::Literal),
+                folded::folded(indent_level).map(Scalar::Folded),
+            )),
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::borrow::Cow;
+
+    use crate::parse::{context::BlockOut, testing};
+
+    #[test]
+    fn block_scalar_literal() {
+        let (rest, got) =
+            testing::parse(block_scalar(BlockOut, IndentLevel::initial()), " |\n  text\n").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Scalar::Literal(Cow::Owned("text\n".to_string())), got);
+    }
+
+    #[test]
+    fn block_scalar_folded() {
+        let (rest, got) =
+            testing::parse(block_scalar(BlockOut, IndentLevel::initial()), " >\n  text\n").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Scalar::Folded(Cow::Owned("text\n".to_string())), got);
+    }
 }

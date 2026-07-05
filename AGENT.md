@@ -101,6 +101,14 @@ Roughly implemented and unit-tested:
   swallow a `---`/`...` marker line (`document.rs::forbidden`). Produces `value::Scalar::Plain`, a
   new variant separate from `SingleStr`/`DoubleStr` since only plain-style scalars are eligible for
   core-schema resolution (Phase 6). See Phase 1 below (now complete).
+- Block scalars, literal (`|`, `block/literal.rs`) and folded (`>`, `block/folded.rs`), including
+  the chomping indicator/matrix (Strip/Clip/Keep, `block/header.rs`), the indentation indicator and
+  auto-detected content indentation (`block/header.rs::detect_indentation`), folded-line vs.
+  more-indented-line handling, and trailing comment lines. Produces the new `value::Scalar::Literal`
+  / `Scalar::Folded` variants (both always resolve to `str`, like the quoted styles).
+  `block/scalar.rs::block_scalar` ties header + content together and is fully unit-tested, but is
+  not yet reachable from real documents -- that requires Phase 4's `block_in_block` to dispatch to
+  it. See Phase 3 below (now complete).
 
 Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
 `cargo build` warning-free pass would still leave semantically incomplete:
@@ -108,9 +116,6 @@ Not implemented (stub returns `fail`, or missing outright) -- these are exactly 
 - Explicit documents (`--- ... ...`) -- `document.rs::explicit_document` is `fail`.
 - Block mapping entries -- `block/map.rs::block_map_entry` is `fail`, so `block_mapping` cannot
   actually produce a mapping yet even though its outer loop/indent logic is written.
-- Block scalar content (literal `|` and folded `>`) -- `block/scalar.rs::block_scalar` is `fail`;
-  `block/header.rs` only has the chomping indicator, not the indentation indicator or the header
-  parse as a whole.
 - `block/node.rs::block_in_block` (dispatches to block sequence/mapping/scalar by lookahead) and
   `block_indented` (content of a `-` sequence entry, including compact notation) are both `fail`.
   `flow_in_block` (the flow-node-inside-a-block-context case) *is* implemented.
@@ -366,9 +371,9 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       exercise the same flow-node property grammar already covered above; revisit if a future phase
       needs example-level fixtures for regression tracking.
 
-### Phase 3 -- Block scalars (literal `|` / folded `>`)
+### Phase 3 -- Block scalars (literal `|` / folded `>`) -- DONE
 
-- [ ] **3a. `block/header.rs`: `indentation_indicator` + `block_header`.**
+- [x] **3a. `block/header.rs`: `indentation_indicator` + `block_header`.**
       [`c-indentation-indicator`](https://yaml.org/spec/1.2.2/#rule-c-indentation-indicator):
       `opt(one_of('1'..='9')).map(|c| c.map(|c| c as usize - '0' as usize))`.
       [`c-b-block-header`](https://yaml.org/spec/1.2.2/#rule-c-b-block-header) allows the two
@@ -376,14 +381,28 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       `(opt(ind), chomping_indicator, opt(ind))` + verify not both `Some` (or `alt` of the two
       orders; note `chomping_indicator` never fails, it's `opt`-based). Return
       `(Option<usize>, ChompingMode)`; end with `spaces::space_break_comment`.
-- [ ] **3b. Auto-detected indentation** ([§8.1.1.2](https://yaml.org/spec/1.2.2/#rule-c-indentation-indicator),
-      the hard part of this phase). When the indicator is absent, `m` = (leading spaces of the first
-      non-empty content line) − n, minimum 1; **error** if any leading *empty* line is more indented
-      than that first non-empty line. Implement as a hand-rolled `detect_indentation(n)` that
+- [x] **3b. Auto-detected indentation** ([§8.1.1.2](https://yaml.org/spec/1.2.2/#rule-c-indentation-indicator),
+      the hard part of this phase). Implemented as a hand-rolled `detect_indentation` that
       `checkpoint()`s, scans forward line-by-line counting leading spaces (empty = only spaces then
-      break), computes `m`, `reset()`s, and returns the `IndentLevel` -- the actual content parse
-      then re-consumes normally. Test with spec examples 8.2 and 8.3 (8.3 shows the invalid cases).
-- [ ] **3c. New `block/literal.rs`.** Rules, 1:1:
+      break), `reset()`s, and returns the absolute `IndentLevel` -- the actual content parse then
+      re-consumes normally. **Deviation from this plan's literal wording**: the function takes no
+      `n` parameter at all (not `detect_indentation(n)`), and doesn't compute an `n`-relative `m`.
+      The actual spec text for this rule (unlike the indentation-indicator case) defines the
+      content indentation level as simply "the leading spaces of the first non-empty line" (or the
+      longest line, if none) -- an absolute quantity, not `n + m`. Computing it via `n`-relative
+      arithmetic turns out to be actively wrong at the document-root sentinel (`IndentLevel`'s
+      internal `n+1` representation collapses `-1` and `0` under `.get()`'s `saturating_sub`),
+      so the simpler, more literal reading was also the correct one. Error if any leading *empty*
+      line is more indented than that first non-empty line. Known scope limitation documented
+      inline: the scan isn't bounded by the block scalar's own indentation level, so an empty block
+      scalar immediately followed by unrelated, less-indented sibling content could have that
+      sibling's indentation misread as detected content indentation; harmless today since
+      `block_scalar` is only unit-tested directly (3f) -- flagged for Phase 4 to revisit if it
+      surfaces there. Tested with spec examples 8.2 and 8.3 (8.3's invalid over-indented-empty-line
+      case; its other invalid case, an under-indented continuation line, self-heals into an empty
+      scalar that leaves the foreign line unconsumed rather than erroring, which is fine given
+      `block_scalar` isn't embedded in real document parsing yet).
+- [x] **3c. New `block/literal.rs`.** Rules, 1:1:
       - `literal_text` ([`l-nb-literal-text(n)`](https://yaml.org/spec/1.2.2/#rule-l-nb-literal-text)):
         `(repeat(0.., spaces::line_empty(BlockIn, n)), spaces::indent(n), take_while(1.., chars::is_non_break))`
         -- the collected empties contribute `\n`s.
@@ -397,24 +416,43 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       - `literal` ([`c-l+literal(n)`](https://yaml.org/spec/1.2.2/#rule-c-l+literal)): hand-rolled:
         parse `'|'`, `block_header`, resolve `m` (explicit or 3b), then
         `literal_content(n + m, t)`. Output is folded/joined → `Cow::Owned` in general.
-- [ ] **3d. New `block/folded.rs`.** The most intricate rule cluster; transcribe each of
+- [x] **3d. New `block/folded.rs`.** The most intricate rule cluster; transcribed each of
       `s-nb-folded-text` / `l-nb-folded-lines` / `s-nb-spaced-text` / `b-l-spaced` /
       `l-nb-spaced-lines` / `l-nb-same-lines` / `l-nb-diff-lines` /
       [`l-folded-content`](https://yaml.org/spec/1.2.2/#rule-l-folded-content) 1:1. Key semantics:
       breaks between same-indented text lines fold to a space (reuse
       `spaces::break_line_folded(BlockIn, ...)`), but "more-indented" lines (spaced text, starting
-      with extra white) are kept literal with real breaks. Test each sub-rule against spec examples
-      8.10–8.13.
-- [ ] **3e. `block/scalar.rs::block_scalar`**: per
-      [`s-l+block-scalar`](https://yaml.org/spec/1.2.2/#rule-s-l+block-scalar):
-      `preceded(separate(context, n+1), (opt((properties(n+1), separate)) /* Phase 2 */, alt((literal(n), folded(n)))))`.
-      Add `value::Scalar::Literal(Cow)` and `Scalar::Folded(Cow)` variants (block scalars always
-      resolve to `str` in Phase 6, like quoted); update the harness conversion in
-      `tests/integration_tests.rs`.
-- [ ] **3f.** `block_scalar` is unreachable until Phase 4's `block_in_block` dispatches to it; until
-      then, unit-test it directly.
-- [ ] **3g. Tests.** [§8.1](https://yaml.org/spec/1.2.2/#81-block-scalar-styles) examples 8.1–8.13,
-      especially the chomping matrix (8.4–8.6, incl. empty scalars) and folded specials (8.10–8.13).
+      with extra white) are kept literal with real breaks. Tested each sub-rule (via the composed
+      `folded()` entry point) against spec examples 8.8, 8.10 and 8.11.
+- [x] **3e. `block/scalar.rs::block_scalar`**: per
+      [`s-l+block-scalar`](https://yaml.org/spec/1.2.2/#rule-s-l+block-scalar), minus the
+      properties part (see below): `preceded(separate(context, n+1), alt((literal(n).map(Scalar::Literal), folded(n).map(Scalar::Folded))))`.
+      Added `value::Scalar::Literal(Cow)` and `Scalar::Folded(Cow)` variants (block scalars always
+      resolve to `str` in Phase 6, like quoted); updated the harness conversion in
+      `tests/integration_tests.rs`. **Deviation**: did *not* wire in `c-ns-properties(n+1,c)` here
+      as the plan's composition shows -- doing so would require `block_scalar` to return a `Node`
+      (to carry the anchor/tag) instead of a bare `Scalar`, and that signature change is already
+      planned as part of Phase 4a's wider Content->Node migration for block constructs. Left a
+      `TODO(Phase 4)` comment at the spot instead of doing it piecemeal here.
+- [x] **3f.** `block_scalar` is unreachable until Phase 4's `block_in_block` dispatches to it; until
+      then, unit-tested directly (`block/scalar.rs`'s own tests, plus each of `literal.rs`/
+      `folded.rs`/`header.rs`'s colocated tests exercising the sub-rules directly).
+- [x] **3g. Tests.** Spec examples 8.5 (chomping matrix, both literal and folded halves), 8.7
+      (Literal Scalar), 8.8 (Folded Scalar), 8.9 (Literal Content), 8.10 (Folded Lines, adapted --
+      see the test's doc comment for what was dropped and why), 8.11 (More Indented Lines), plus
+      the block header composition itself (empty/indentation-only/chomping-only/both-orders) and
+      `detect_indentation`'s own success/error cases. Two real, previously-latent bugs surfaced and
+      were fixed along the way (both outside this phase's own new code, but required for it to
+      work): `chars::is_non_break` excluded space (`char::is_ascii_graphic` only covers `x21-x7E`,
+      not space at `x20`), breaking any multi-word comment or block-scalar content line -- fixed to
+      `is_ascii() && !is_ascii_control()`; and a new `repeat(0.., spaces::line_comment)` call in
+      `l-trail-comments` hit the exact same "`repeat` must always consume" trap Phase 0 already
+      fixed in `document.rs` (`line_comment` can succeed while consuming nothing at EOF), fixed with
+      the same `.take().verify(|s| !s.is_empty())` guard. Conformance report: 129/402 (32.1%) ->
+      132/402 (32.8%) -- the small gain is from the `is_non_break` fix (comments/content with
+      spaces), not from block scalars themselves, since they're not yet reachable from real
+      documents (see 3f); no regressions (`StructuralMismatch`/`ParserPanic`/
+      `UnexpectedSuccessOnErrorCase` all still 0, `ContentMismatch` still 2).
 
 ### Phase 4 -- Block collections (biggest conformance jump; needs Phases 1 & 3, property slot from 2)
 
@@ -553,11 +591,15 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: ~129/402 (32.1%)** -- unchanged after Phase 2, since node
-      properties/anchors mostly unlock cases that also need block collections (Phase 4) to reach
-      content using them; no regressions either (`StructuralMismatch`/`ParserPanic`/
-      `UnexpectedSuccessOnErrorCase` all still 0, `ContentMismatch` still 2). Update this number
-      whenever a phase lands. The real bugs this harness surfaced are now tracked as Phase 0 above.
+      `cargo test`. **Current pass rate: ~132/402 (32.8%)** -- Phase 2 (node properties/anchors)
+      held flat at 129/402, since those mostly unlock cases that also need block collections
+      (Phase 4) to reach content using them. Phase 3 (block scalars) nudged it to 132/402; block
+      scalars themselves aren't reachable from real documents yet either (same Phase 4 dependency),
+      but fixing a latent `chars::is_non_break` bug along the way (it excluded space, breaking any
+      multi-word comment) unlocked a few flow-style cases with comments. No regressions in either
+      phase (`StructuralMismatch`/`ParserPanic`/`UnexpectedSuccessOnErrorCase` all still 0,
+      `ContentMismatch` still 2). Update this number whenever a phase lands. The real bugs this
+      harness surfaced are now tracked as Phase 0 above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 
 ### Phase 8 -- Polish (do last, or opportunistically)
