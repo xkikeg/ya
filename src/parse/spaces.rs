@@ -111,10 +111,13 @@ where
 {
     trace("spaces::indent_less_than", move |input: &mut Input| {
         if indent_level.get() == 0 {
-            return Err(Error::assert(
-                input,
-                "indent_less_than cannot parse anything if n<=0",
-            ));
+            // `s-space{0,n-1}` for `n<=0` has an empty valid range (no negative space count
+            // exists): this is a legitimate, reachable case (e.g. a root-level block scalar
+            // whose content indentation is 0), not a violated invariant, so it must fail
+            // recoverably rather than assert/panic -- both call sites (`line_empty`'s
+            // `line_prefix` fallback, and `l-trail-comments` via `opt(...)`) already handle a
+            // backtrackable failure here correctly.
+            return Err(Error::from_input(input));
         }
         take_while(..indent_level.get(), b" ")
             .void()
@@ -489,12 +492,25 @@ where
             if input.eof_offset() == 0 {
                 return Ok(());
             }
-            let got = line_comment.take().parse_next(input)?;
-            if got.is_empty() {
-                return Err(Error::assert(
-                    input,
-                    "line_comment must consume >= 1 chars when not EOF",
-                ));
+            // `l-comment*` is zero-or-more: once real (non-comment, non-blank) sibling content
+            // follows -- the common case once a node is followed by another block-collection
+            // entry -- `line_comment` fails and the loop must stop gracefully rather than
+            // propagate that failure, so roll back to before this attempt.
+            let checkpoint = input.checkpoint();
+            match line_comment::<Input, Error>.take().parse_next(input) {
+                Ok(got) => {
+                    if got.is_empty() {
+                        return Err(Error::assert(
+                            input,
+                            "line_comment must consume >= 1 chars when not EOF",
+                        ));
+                    }
+                }
+                Err(err) if err.is_backtrack() => {
+                    input.reset(&checkpoint);
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
             }
         }
     })

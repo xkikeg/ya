@@ -314,4 +314,36 @@ mod tests {
             testing::parse(yaml_stream, input).unwrap()
         );
     }
+
+    fn plain(s: &str) -> Node<'_> {
+        Node::unspecified(Content::Scalar(value::Scalar::Plain(Cow::Borrowed(s))))
+    }
+
+    /// Spec example 8.14 "Block Sequence": a mapping whose single value is a nested block
+    /// sequence -- exercises `seq-space(n,c)` (BLOCK-OUT lets the nested sequence align with its
+    /// own key's indentation).
+    #[test]
+    fn block_sequence_spec_example_8_14() {
+        let input = "block sequence:\n  - one\n  - two : three\n";
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::unspecified(Content::Map(
+                    value::Mapping(vec![value::MapEntry {
+                        key: plain("block sequence"),
+                        value: Node::unspecified(Content::Seq(vec![
+                            plain("one"),
+                            Node::unspecified(Content::Map(value::Mapping(vec![
+                                value::MapEntry {
+                                    key: plain("two"),
+                                    value: plain("three"),
+                                }
+                            ]))),
+                        ])),
+                    }])
+                )))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
 }

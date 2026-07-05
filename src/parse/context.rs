@@ -53,7 +53,14 @@ pub trait InOutFlow: NonKey + FlowOrKey {}
 /// Context which is in/out of block.
 /// * [`BlockIn`]
 /// * [`BlockOut`]
-pub trait InOutBlock: NonKey {}
+pub trait InOutBlock: NonKey {
+    /// The indentation level used for a block sequence found directly within this context, per
+    /// [`seq-spaces(n,c)`](https://yaml.org/spec/1.2.2/#rule-seq-space): unchanged for
+    /// BLOCK-IN, one less for BLOCK-OUT (so that a sequence value may align with its mapping
+    /// key's own indentation).
+    #[doc(alias = "seq-space")]
+    fn seq_space(indent_level: IndentLevel) -> IndentLevel;
+}
 
 /// Flow or block key context.
 /// * [`BlockKey`]
@@ -138,8 +145,17 @@ impl Sealed for FlowKey {}
 impl InOutFlow for FlowIn {}
 impl InOutFlow for FlowOut {}
 
-impl InOutBlock for BlockIn {}
-impl InOutBlock for BlockOut {}
+impl InOutBlock for BlockIn {
+    fn seq_space(indent_level: IndentLevel) -> IndentLevel {
+        indent_level
+    }
+}
+
+impl InOutBlock for BlockOut {
+    fn seq_space(indent_level: IndentLevel) -> IndentLevel {
+        indent_level.prev()
+    }
+}
 
 impl InFlow for FlowIn {}
 impl InFlow for FlowKey {}

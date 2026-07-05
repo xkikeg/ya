@@ -29,11 +29,19 @@ where
     trace("block::folded::folded", move |input: &mut Input| {
         '>'.parse_next(input)?;
         let (indentation, chomping) = header::block_header.parse_next(input)?;
-        let content_indent = match indentation {
-            Some(m) => indent_level + m,
-            None => header::detect_indentation.parse_next(input)?,
-        };
-        folded_content(content_indent, chomping).parse_next(input)
+        match indentation {
+            Some(m) => folded_content(indent_level + m, chomping).parse_next(input),
+            None => {
+                // See `detect_indentation`'s doc comment: when it finds no content of its own,
+                // the text-matching phase must be skipped entirely rather than attempted at
+                // `bound` (which can be a degenerate, always-matching `s-indent(0)`).
+                let detected = header::detect_indentation(indent_level).parse_next(input)?;
+                match detected.content {
+                    Some(content_indent) => folded_content(content_indent, chomping).parse_next(input),
+                    None => header::chomped_empty(detected.bound, chomping).parse_next(input),
+                }
+            }
+        }
     })
 }
 

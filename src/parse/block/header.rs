@@ -109,19 +109,45 @@ where
 /// Implemented by scanning forward line-by-line and resetting the input afterwards, so the real
 /// content parse re-consumes normally from the detected `IndentLevel`.
 ///
-/// Known limitation: the forward scan doesn't bound itself by the block scalar's own indentation
-/// level -- it stops at the first line that isn't blank, whatever its own indentation. A block
-/// scalar with no real content, immediately followed by unrelated sibling content at or below
-/// that level, would currently have that sibling's indentation misread as its detected content
-/// indentation. This doesn't yet matter because `block_scalar` is only reachable from direct unit
-/// tests (Phase 3f) -- Phase 4's `block_in_block` wiring is what actually bounds a block scalar's
-/// extent, and should revisit this if it surfaces there.
+/// Outcome of [`detect_indentation`].
+#[derive(Debug)]
+pub(super) struct DetectedIndentation {
+    /// The content's own auto-detected indentation level, when the scalar actually has content
+    /// (a non-empty line indented more than the scalar's own `n`). `None` when it doesn't --
+    /// callers must then skip the text-line-matching phase entirely (see [`detect_indentation`]'s
+    /// doc comment) rather than attempt it at [`Self::bound`].
+    pub(super) content: Option<IndentLevel>,
+    /// The level to bound trailing/leading blank-line recognition by (`l-chomped-empty` and
+    /// friends) regardless of whether [`Self::content`] is present: either that same content
+    /// indentation, or -- when there's no content -- the largest indentation seen among any
+    /// blank line scanned, so deeply-indented blank lines are still correctly recognized as
+    /// blank rather than left unconsumed.
+    pub(super) bound: IndentLevel,
+}
+
+/// Bounded by the block scalar's own indentation level `n` (the `indent_level` argument, same
+/// one given to the enclosing [`literal`](super::literal::literal) /
+/// [`folded`](super::folded::folded)): a candidate first non-empty line must be indented *more*
+/// than `n`, or it doesn't belong to this scalar's content at all -- it's whatever follows the
+/// scalar instead (a sibling node in the enclosing block collection), and the scalar has no
+/// content lines of its own ([`DetectedIndentation::content`] is `None`).
+///
+/// This distinction matters beyond just *which* line counts: when there's no content, callers
+/// must not attempt the text-line-matching phase (`literal_text`/`folded_text`) at all, even at
+/// [`DetectedIndentation::bound`]. That phase matches via `s-indent(m)` followed by any non-break
+/// line, and `s-indent(m)` for `m=0` matches trivially (consuming zero spaces unconditionally) --
+/// so at the document root (`n=-1`), where a totally unindented sibling line is completely normal,
+/// skipping straight past the text-matching phase is the only way to avoid swallowing that
+/// sibling as if it were more scalar content. This surfaced for real once Phase 4 made block
+/// scalars reachable inside block collections (e.g. an empty `strip: >-` entry immediately
+/// followed by a sibling `clip: >` at column 0); see AGENT.md's Phase 3 history for the earlier,
+/// unbounded version of this scan.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-indentation-indicator
 #[doc(alias = "c-indentation-indicator")]
 pub(super) fn detect_indentation<'i, Input, Error>(
-    input: &mut Input,
-) -> winnow::Result<IndentLevel, Error>
+    indent_level: IndentLevel,
+) -> impl Parser<Input, DetectedIndentation, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -141,6 +167,9 @@ where
                 max_empty_spaces = max_empty_spaces.max(spaces);
                 continue;
             }
+            if spaces <= indent_level.get() {
+                break;
+            }
             detected = Some(spaces);
             break;
         }
@@ -158,9 +187,11 @@ where
             }
         }
         input.reset(&start);
-        Ok(IndentLevel::new(detected.unwrap_or(max_empty_spaces)))
+        Ok(DetectedIndentation {
+            content: detected.map(IndentLevel::new),
+            bound: IndentLevel::new(detected.unwrap_or(max_empty_spaces)),
+        })
     })
-    .parse_next(input)
 }
 
 /// Interpretation of the final line break of a block scalar, per its chomping mode.
@@ -335,15 +366,30 @@ mod tests {
 
     #[test]
     fn detect_indentation_from_first_non_empty_line() {
-        let (rest, level) = testing::parse(detect_indentation, " detected\n").unwrap();
+        let (rest, detected) =
+            testing::parse(detect_indentation(IndentLevel::initial()), " detected\n").unwrap();
         assert_eq!(" detected\n", rest);
-        assert_eq!(IndentLevel::new(1), level);
+        assert_eq!(Some(IndentLevel::new(1)), detected.content);
+        assert_eq!(IndentLevel::new(1), detected.bound);
     }
 
     #[test]
     fn detect_indentation_rejects_over_indented_leading_empty_line() {
         // Spec example 8.3, case 1: the leading blank line has 2 spaces, more than the 1 space of
         // the first non-empty line that follows.
-        testing::parse(detect_indentation, "  \n text\n").unwrap_err();
+        testing::parse(detect_indentation(IndentLevel::initial()), "  \n text\n").unwrap_err();
+    }
+
+    #[test]
+    fn detect_indentation_stops_at_sibling_content_not_indented_further() {
+        // A block scalar with no content of its own (e.g. `strip: >-` immediately followed by a
+        // sibling `clip: >` at column 0, as in yaml-test-suite case K858) must not mistake that
+        // sibling line for its own content: `n=0` (BlockOut root) and the candidate line has 0
+        // leading spaces, i.e. not *more* indented than `n`.
+        let (rest, detected) =
+            testing::parse(detect_indentation(IndentLevel::initial()), "sibling: x\n").unwrap();
+        assert_eq!("sibling: x\n", rest);
+        assert_eq!(None, detected.content);
+        assert_eq!(IndentLevel::new(0), detected.bound);
     }
 }

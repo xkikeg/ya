@@ -1,13 +1,11 @@
 use winnow::combinator::alt;
-use winnow::error::{StrContext, StrContextValue};
-use winnow::stream::Stream;
 use winnow::{combinator::opt, combinator::preceded, combinator::trace, Parser};
 
 use crate::parse::{
     alias::alias_node, context::FlowOrKey, error::ParserError, flow::content::flow_content,
     input::InputStream, properties, spaces, spaces::IndentLevel,
 };
-use crate::value::{Content, Node, Tag};
+use crate::value::{Content, Node};
 
 use super::content::{flow_json_content, flow_yaml_content};
 
@@ -89,7 +87,7 @@ where
                 Some(properties::Properties { anchor, tag }) => (anchor, tag),
                 None => (None, None),
             };
-            build_node(input, &start, anchor, tag, value)
+            properties::build_node(input, &start, anchor, tag, value)
         },
     )
 }
@@ -120,38 +118,8 @@ where
         ))
         .parse_next(input)?
         .unwrap_or(Content::Empty);
-        build_node(input, &start, props.anchor, props.tag, value)
+        properties::build_node(input, &start, props.anchor, props.tag, value)
     })
-}
-
-/// Resolves the (optional) tag property against the parse-time tag-handle map, builds the
-/// `Node`, and registers its anchor (if any) so later aliases can resolve it.
-fn build_node<'i, Input, Error>(
-    input: &mut Input,
-    start: &<Input as Stream>::Checkpoint,
-    anchor: Option<&'i str>,
-    tag: Option<properties::TagProperty<'i>>,
-    value: Content<'i>,
-) -> winnow::Result<Node<'i>, Error>
-where
-    Input: InputStream<'i>,
-    Error: ParserError<Input>,
-{
-    let tag = match tag {
-        None => Tag::Unspecified,
-        Some(prop) => properties::resolve_tag(input.tag_handles(), prop).ok_or_else(|| {
-            Error::from_input(input).add_context(
-                input,
-                start,
-                StrContext::Expected(StrContextValue::Description("a declared tag handle")),
-            )
-        })?,
-    };
-    let node = Node::new(value, tag);
-    if let Some(name) = anchor {
-        input.anchor_store_mut().put(name.to_string(), node.clone());
-    }
-    Ok(node)
 }
 
 #[cfg(test)]
@@ -167,7 +135,7 @@ mod tests {
         input::{Input, WithAnchorStore},
         testing,
     };
-    use crate::value::Scalar;
+    use crate::value::{Scalar, Tag};
 
     #[test]
     fn flow_yaml_node_with_tag_and_anchor_registers_anchor() {
