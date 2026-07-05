@@ -1,12 +1,12 @@
 use winnow::{
     combinator::{preceded, trace},
-    token::{one_of, take_while},
+    token::one_of,
     Parser,
 };
 
 use crate::value::Node;
 
-use super::{chars, error::ParserError, input::InputStream};
+use super::{error::ParserError, input::InputStream, properties::anchor_name};
 
 /// Alias node.
 ///
@@ -19,13 +19,7 @@ where
 {
     trace("alias::alias_node", move |input: &mut Input| {
         let start = input.checkpoint();
-        let alias = preceded(
-            one_of('*'),
-            take_while(1.., |c| {
-                chars::is_non_space(c) && !chars::is_flow_indicator(c)
-            }),
-        )
-        .parse_next(input)?;
+        let alias = preceded(one_of('*'), anchor_name).parse_next(input)?;
         input.anchor_store().get(alias).cloned().ok_or_else(|| {
             Error::from_input(input).add_context(
                 input,

@@ -6,6 +6,7 @@ use winnow::{
 };
 
 use super::anchor::AnchorStore;
+use super::tag_handles::TagHandles;
 
 /// Trait to cover all required traits, which is essentially a trait alias.
 pub trait InputStream<'i>:
@@ -15,6 +16,7 @@ pub trait InputStream<'i>:
     + Compare<char>
     + TrackStartOfLine
     + WithAnchorStore<'i>
+    + WithTagHandles<'i>
     + Clone
 {
 }
@@ -26,6 +28,7 @@ impl<'i, T> InputStream<'i> for T where
         + Compare<char>
         + TrackStartOfLine
         + WithAnchorStore<'i>
+        + WithTagHandles<'i>
         + Clone
 {
 }
@@ -38,7 +41,15 @@ pub struct Input<'i> {
 }
 
 /// internal input type used for [`Input`].
-type InnerInput<'i> = Stateful<LocatingSlice<&'i str>, AnchorStore<'i>>;
+type InnerInput<'i> = Stateful<LocatingSlice<&'i str>, ParseState<'i>>;
+
+/// Parse-time mutable state threaded through the input stream: the document's anchors and the
+/// tag-handle -> prefix map.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ParseState<'i> {
+    anchors: AnchorStore<'i>,
+    tag_handles: TagHandles<'i>,
+}
 
 impl<'i> Input<'i> {
     /// Creates a new instance.
@@ -46,7 +57,7 @@ impl<'i> Input<'i> {
         Self {
             inner: Stateful {
                 input: LocatingSlice::new(from),
-                state: AnchorStore::new(),
+                state: ParseState::default(),
             },
             original: from,
         }
@@ -64,11 +75,30 @@ pub trait WithAnchorStore<'i> {
 
 impl<'i> WithAnchorStore<'i> for Input<'i> {
     fn anchor_store(&self) -> &AnchorStore<'i> {
-        &self.inner.state
+        &self.inner.state.anchors
     }
 
     fn anchor_store_mut(&mut self) -> &mut AnchorStore<'i> {
-        &mut self.inner.state
+        &mut self.inner.state.anchors
+    }
+}
+
+/// Trait supporting [`TagHandles`] access, both mutable and immutable.
+pub trait WithTagHandles<'i> {
+    /// Get immutable ref.
+    fn tag_handles(&self) -> &TagHandles<'i>;
+
+    /// Get mut ref.
+    fn tag_handles_mut(&mut self) -> &mut TagHandles<'i>;
+}
+
+impl<'i> WithTagHandles<'i> for Input<'i> {
+    fn tag_handles(&self) -> &TagHandles<'i> {
+        &self.inner.state.tag_handles
+    }
+
+    fn tag_handles_mut(&mut self) -> &mut TagHandles<'i> {
+        &mut self.inner.state.tag_handles
     }
 }
 
@@ -242,6 +272,19 @@ where
 
     fn anchor_store_mut(&mut self) -> &mut AnchorStore<'i> {
         self.inner.anchor_store_mut()
+    }
+}
+
+impl<'i, I> WithTagHandles<'i> for WithLimit<I>
+where
+    I: WithTagHandles<'i> + 'i,
+{
+    fn tag_handles(&self) -> &TagHandles<'i> {
+        self.inner.tag_handles()
+    }
+
+    fn tag_handles_mut(&mut self) -> &mut TagHandles<'i> {
+        self.inner.tag_handles_mut()
     }
 }
 

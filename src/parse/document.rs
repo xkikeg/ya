@@ -299,4 +299,19 @@ mod tests {
             testing::parse(yaml_stream, input).unwrap()
         );
     }
+
+    #[test]
+    fn anchor_and_alias_resolve_to_the_same_node() {
+        let input = "[&a foo, *a]";
+        let foo = Node::unspecified(Content::Scalar(value::Scalar::Plain(Cow::Borrowed("foo"))));
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::unspecified(Content::Seq(
+                    vec![foo.clone(), foo]
+                )))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
 }

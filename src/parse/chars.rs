@@ -1,9 +1,10 @@
 //! Characters library.
 
 use winnow::{
-    combinator::{alt, opt, trace},
+    combinator::{alt, opt, repeat, trace},
     error::ParserError,
     stream::{Compare, Stream, StreamIsPartial},
+    token::one_of,
     Parser,
 };
 
@@ -76,6 +77,84 @@ pub const fn is_indicator(c: char) -> bool {
             | '@'
             | '`'
     )
+}
+
+/// Word (alphanumeric, plus `-`) chars, used in tag handles and shorthands.
+///
+/// https://yaml.org/spec/1.2.2/#rule-ns-word-char
+#[doc(alias = "ns-word-char")]
+#[inline]
+pub fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+/// The single-character (i.e. non-`%XX`-escape) alternatives of `ns-uri-char`.
+#[inline]
+fn is_uri_char_single(c: char) -> bool {
+    is_word_char(c)
+        || matches!(
+            c,
+            '#' | ';'
+                | '/'
+                | '?'
+                | ':'
+                | '@'
+                | '&'
+                | '='
+                | '+'
+                | '$'
+                | ','
+                | '_'
+                | '.'
+                | '!'
+                | '~'
+                | '*'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+        )
+}
+
+/// Tag chars: [`ns-uri-char`](#rule-ns-uri-char) minus `!` and [`c-flow-indicator`].
+///
+/// https://yaml.org/spec/1.2.2/#rule-ns-tag-char
+#[doc(alias = "ns-tag-char")]
+#[inline]
+pub fn is_tag_char(c: char) -> bool {
+    is_uri_char_single(c) && c != '!' && !is_flow_indicator(c)
+}
+
+/// URI chars, as used in [tags]. Unlike [`is_tag_char`], this is a slice parser rather than a
+/// character predicate: `%` must be followed by exactly two hex digits, which a plain predicate
+/// can't express.
+///
+/// https://yaml.org/spec/1.2.2/#rule-ns-uri-char
+#[doc(alias = "ns-uri-char")]
+pub fn uri_chars<Input, Error>(input: &mut Input) -> Result<<Input as Stream>::Slice, Error>
+where
+    Input: StreamIsPartial + Stream<Token = char> + Compare<char>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "chars::uri_chars",
+        repeat(
+            1..,
+            alt((
+                one_of(is_uri_char_single).void(),
+                ('%', one_of(is_hex_digit), one_of(is_hex_digit)).void(),
+            )),
+        )
+        .map(|()| ())
+        .take(),
+    )
+    .parse_next(input)
+}
+
+#[inline]
+fn is_hex_digit(c: char) -> bool {
+    c.is_ascii_hexdigit()
 }
 
 /// JSON compatible chars.

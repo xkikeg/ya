@@ -83,8 +83,17 @@ Roughly implemented and unit-tested:
   (`single.rs`, `double.rs`).
 - Flow collections: sequences, mappings (explicit/implicit/yaml-key/json-key entries), pairs
   (`flow/seq.rs`, `flow/map.rs`, `flow/pair.rs`).
-- Aliases and the anchor store (`alias.rs`, `anchor.rs`) -- but nothing populates the anchor store yet
-  because anchor *properties* aren't parsed (see gaps).
+- Aliases and the anchor store (`alias.rs`, `anchor.rs`), now populated: node properties
+  (`properties.rs`) parse anchors and the three tag forms (verbatim, shorthand, non-specific), and
+  `flow/node.rs` registers each anchored node into the anchor store as it's built, so
+  `[&a foo, *a]`-style alias resolution works end-to-end.
+- Node properties (`c-ns-properties`, `properties.rs`): anchors (`&name`), verbatim tags (`!<...>`),
+  shorthand tags (`!handle!suffix`, including `%XX`-escaped suffixes), and the non-specific tag
+  (`!`) alone. Tag handles (`tag_handles.rs`) resolve the two default handles (`!`, `!!`); an
+  undeclared shorthand handle is a parse error. `value::Tag::NonSpecific` is a new variant for the
+  bare-`!` case (forces str/map/seq, disables core-schema resolution later). Wired into
+  `flow/node.rs`'s `flow_node`/`flow_yaml_node`/`flow_json_node`. See Phase 2 below (now complete
+  for flow nodes; block-context property slots are still markers for their respective phases).
 - Document stream skeleton for the *bare document* case (`document.rs::yaml_stream`,
   `bare_document`), with two working unit tests (flow seq, flow map).
 - Plain scalars (`plain.rs`), one-line and multi-line, including line folding, the `#`-lookbehind
@@ -95,10 +104,6 @@ Roughly implemented and unit-tested:
 
 Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
 `cargo build` warning-free pass would still leave semantically incomplete:
-- Node properties (anchor `&name` / tag `!!str`, `!<...>`, `!handle!suffix`) are entirely unparsed.
-  `flow/node.rs` has three `// TODO: fixme Support properties.` markers; there is no `properties.rs`
-  module and no tag-handle resolution yet. `value::Tag` exists as a data type but nothing produces
-  non-`Unspecified` tags.
 - Directives (`%YAML`, `%TAG`, reserved directives) -- `document.rs::directive_document` is `fail`.
 - Explicit documents (`--- ... ...`) -- `document.rs::explicit_document` is `fail`.
 - Block mapping entries -- `block/map.rs::block_map_entry` is `fail`, so `block_mapping` cannot
@@ -299,16 +304,16 @@ Escalate if: the `previous_char` lookbehind turns out to conflict with `WithLimi
 another input wrapper -- the fallback design (thread a "previous char class" flag through a fused
 in-line loop) trades away spec shape and should be a maintainer decision.
 
-### Phase 2 -- Node properties (anchors & tags)
+### Phase 2 -- Node properties (anchors & tags) -- DONE (for flow nodes)
 
-- [ ] **2a. Character classes in `chars.rs`**: `is_word_char`
+- [x] **2a. Character classes in `chars.rs`**: `is_word_char`
       ([`ns-word-char`](https://yaml.org/spec/1.2.2/#rule-ns-word-char): alnum + `-`),
       `is_tag_char` ([`ns-tag-char`](https://yaml.org/spec/1.2.2/#rule-ns-tag-char)), and a
       `uri_chars` slice parser for [`ns-uri-char`](https://yaml.org/spec/1.2.2/#rule-ns-uri-char) --
       URI chars include `%xx` hex escapes, so a plain predicate isn't enough; use
       `repeat(1.., alt((one_of(<plain uri chars>).void(), ('%', hexdig, hexdig).void()))).take()`.
       Keep escapes *raw* (don't percent-decode) at parse time; decoding is a resolution concern.
-- [ ] **2b. New `parse/properties.rs`.** Output types:
+- [x] **2b. New `parse/properties.rs`.** Output types:
       `struct Properties<'i> { anchor: Option<&'i str>, tag: Option<TagProperty<'i>> }`,
       `enum TagProperty<'i> { Verbatim(&'i str), Shorthand { handle: &'i str, suffix: &'i str }, NonSpecific }`
       (conversion to `value::Tag` happens at the node-wiring layer, 2d, using the handle map from 2c).
@@ -325,7 +330,7 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       - `anchor_property` (`c-ns-anchor-property`): `preceded('&', anchor_name)`;
         `anchor_name` (`ns-anchor-name`): `take_while(1.., |c| chars::is_non_space(c) && !chars::is_flow_indicator(c))`
         (same predicate as `alias.rs:24`).
-- [ ] **2c. Tag-handle → prefix map in parse state.** `Input`'s state is currently `AnchorStore`
+- [x] **2c. Tag-handle → prefix map in parse state.** `Input`'s state is currently `AnchorStore`
       directly (`input.rs:41`). Generalize: `Stateful<LocatingSlice<&str>, ParseState<'i>>` where
       `ParseState { anchors: AnchorStore<'i>, tag_handles: TagHandles<'i> }`; add a `WithTagHandles`
       trait mirroring `WithAnchorStore` (`input.rs:57`) and add it to the `InputStream` alias bounds.
@@ -336,7 +341,7 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       (`!`), `value::Tag` needs a way to say "explicitly non-specific" (forces str/map/seq at
       resolution, unlike `Unspecified` which allows plain-scalar schema resolution) -- `value.rs:61`
       has a TODO asking exactly this; add a `Tag::NonSpecific` variant (escalate if in doubt).
-- [ ] **2d. Wire into `flow/node.rs`** (replace the three `// TODO: fixme Support properties.`):
+- [x] **2d. Wire into `flow/node.rs`** (replace the three `// TODO: fixme Support properties.`):
       - `flow_yaml_node` ([rule](https://yaml.org/spec/1.2.2/#rule-ns-flow-yaml-node)): third alt arm
         `(properties(context, n), opt(preceded(separate, flow_yaml_content)))` -- **properties with
         no content is legal** (`!!str &a` alone) and yields `Content::Empty` with that tag/anchor.
@@ -346,12 +351,20 @@ in-line loop) trades away spec shape and should be a maintainer decision.
         `input.anchor_store_mut().put(name.to_string(), node.clone())`. This needs `input` access,
         so write the property-carrying arms as hand-rolled closures (pattern: `key.rs:27`,
         `single.rs:49`), not pure combinator chains.
-- [ ] **2e. Property slots in `block/scalar.rs` and Phase 4's `block_in_block`** are marked in those
-      phases; if this phase lands first, nothing else to do here -- if a block phase lands first,
-      leave `// TODO(Phase 2)` markers there.
-- [ ] **2f. Tests.** Spec examples 6.23 (properties), 6.24/6.25 (verbatim, incl. the *invalid* one),
-      6.26/6.27 (shorthands, incl. invalid), 6.28 (non-specific), 6.29 (anchors); end-to-end:
-      `[&a foo, *a]` parses to two `foo` scalars.
+- [x] **2e. Property slots in `block/scalar.rs` and Phase 4's `block_in_block`** are marked in those
+      phases; this phase landed first (no block phase yet), so nothing else to do here -- whichever
+      block phase lands next should wire `properties(...)` into those slots directly rather than
+      leaving further `// TODO(Phase 2)` markers.
+- [x] **2f. Tests.** Anchor/tag property tests colocated in `properties.rs` (verbatim incl. the
+      bare-`!` invalid case, shorthand incl. `%XX`-escaped suffix and undeclared-handle rejection,
+      non-specific, anchor-only, and both properties orderings) and `tag_handles.rs` (default
+      handles, registering a named handle); end-to-end in `flow/node.rs` (tag+anchor together,
+      anchor-only defaulting to `Unspecified`, tag-only with empty content, JSON-node tag, the
+      non-specific `!` tag, and the undeclared-handle parse error) and `document.rs`
+      (`[&a foo, *a]` parses to two equal `foo` nodes via anchor/alias resolution). Full literal
+      spec-example transcriptions (6.23-6.29) were not added as separate tests since they all
+      exercise the same flow-node property grammar already covered above; revisit if a future phase
+      needs example-level fixtures for regression tracking.
 
 ### Phase 3 -- Block scalars (literal `|` / folded `>`)
 
@@ -540,8 +553,11 @@ in-line loop) trades away spec shape and should be a maintainer decision.
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: ~129/402 (32%)** -- update this number whenever a phase
-      lands. The real bugs this harness surfaced are now tracked as Phase 0 above.
+      `cargo test`. **Current pass rate: ~129/402 (32.1%)** -- unchanged after Phase 2, since node
+      properties/anchors mostly unlock cases that also need block collections (Phase 4) to reach
+      content using them; no regressions either (`StructuralMismatch`/`ParserPanic`/
+      `UnexpectedSuccessOnErrorCase` all still 0, `ContentMismatch` still 2). Update this number
+      whenever a phase lands. The real bugs this harness surfaced are now tracked as Phase 0 above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 
 ### Phase 8 -- Polish (do last, or opportunistically)

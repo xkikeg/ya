@@ -12,9 +12,11 @@ pub mod flow;
 pub mod input;
 pub mod key;
 mod plain;
+mod properties;
 pub mod scalar;
 mod single;
 pub mod spaces;
+mod tag_handles;
 
 #[cfg(test)]
 pub mod testing;
