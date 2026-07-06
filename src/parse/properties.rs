@@ -159,9 +159,11 @@ where
 
 /// Tag handle: the primary (`!`), secondary (`!!`), or a named (`!foo!`) handle.
 ///
+/// Shared with [`super::directive::tag_directive`], which parses the same rule for `%TAG`.
+///
 /// https://yaml.org/spec/1.2.2/#rule-c-tag-handle
 #[doc(alias = "c-tag-handle")]
-fn tag_handle<'i, Input, Error>(input: &mut Input) -> winnow::Result<&'i str, Error>
+pub(super) fn tag_handle<'i, Input, Error>(input: &mut Input) -> winnow::Result<&'i str, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,

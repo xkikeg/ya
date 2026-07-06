@@ -55,8 +55,10 @@ src/
     double.rs           double-quoted flow scalar content incl. escape sequences (nb-double-*)
     plain.rs            plain (unquoted) flow scalar content (ns-plain-*)
     scalar.rs           ties single/double quoted content to c-single-quoted / c-double-quoted
-    document.rs         Chapter 9: l-yaml-stream, l-any-document, l-bare-document, document
-                        prefix/suffix; public `yaml_stream()` entry point + its tests
+    directive.rs        Chapter 6.8: %YAML / %TAG / reserved directives
+    document.rs         Chapter 9: l-yaml-stream, l-any-document, l-bare-document,
+                        l-explicit-document, l-directive-document, document prefix/suffix;
+                        public `yaml_stream()` entry point + its tests
     flow/
       content.rs         ns-flow-content / ns-flow-yaml-content / ns-flow-json-content
       node.rs             ns-flow-node / ns-flow-yaml-node / ns-flow-json-node
@@ -118,11 +120,16 @@ Roughly implemented and unit-tested:
   mapping key's indentation). `block_node`/`block_in_block`/`block_indented` tie flow-in-block,
   block scalars, and block collections together into one recursive entry point, reachable from
   `document.rs::bare_document`. See Phase 4 below (now complete).
+- Directives (`directive.rs`): `%YAML` (major-version-1 check, minor silently accepted),
+  `%TAG` (registers a handle -> prefix mapping into the parse-time `TagHandles` map), and reserved
+  (`%FOO ...`, consumed and ignored). Explicit documents (`document.rs::explicit_document`:
+  `---` + bare document or an empty node) and directive documents (`directive_document`: one or
+  more directives + an explicit document, with duplicate-`%YAML`/duplicate-handle detection) are
+  both implemented and wired into `yaml_stream`'s dispatch, including per-document anchor/tag-handle
+  reset (`AnchorStore::clear`/`TagHandles::clear`). See Phase 5 below (now complete).
 
 Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
 `cargo build` warning-free pass would still leave semantically incomplete:
-- Directives (`%YAML`, `%TAG`, reserved directives) -- `document.rs::directive_document` is `fail`.
-- Explicit documents (`--- ... ...`) -- `document.rs::explicit_document` is `fail`.
 - Tag resolution / Core Schema (turning an unspecified-tag plain scalar into `Null`/`Bool`/`Int`/
   `Float`/string per the core schema) is deferred by design (see comment in `plain.rs::plain`) but
   nothing implements that later stage yet either.
@@ -558,38 +565,104 @@ code, but all were blockers for it):
   needed even in the no-content case, to correctly recognize deeply-indented blank lines as blank
   during the trailing chomping phase.
 
-### Phase 5 -- Directives & explicit/full documents
+### Phase 5 -- Directives & explicit/full documents -- DONE
 
-- [ ] **5a. New `parse/directive.rs`**:
-      - `directive` ([`l-directive`](https://yaml.org/spec/1.2.2/#rule-l-directive)):
-        `delimited('%', alt((yaml_directive, tag_directive, reserved_directive)), spaces::line_comments)`.
-      - `yaml_directive` (`ns-yaml-directive`) + `yaml_version` (`ns-yaml-version`:
-        `digit+ '.' digit+` → `(u32, u32)`). Behavior: hard error if major ≠ 1; accept minor ≠ 2
-        silently, treating it as 1.2 (spec says "should issue a warning" but there is no warning
-        channel -- note this in the doc comment). Duplicate `%YAML` in one document = error.
-      - `tag_directive` (`ns-tag-directive`): `"TAG"`, separation, `properties.rs::tag_handle`,
-        separation, `tag_prefix` (`ns-tag-prefix` = local `!...` or global URI form); inserts into
-        the Phase 2c `TagHandles` via input state. Duplicate handle in one document = error.
-      - `reserved_directive` (`ns-reserved-directive`): name + parameters, consumed and ignored.
-- [ ] **5b. `document.rs::explicit_document`**
-      ([`l-explicit-document`](https://yaml.org/spec/1.2.2/#rule-l-explicit-document)): add a
-      `directives_end` rule fn (`c-directives-end` = `"---"`), then
-      `alt((bare_document, terminated(e_node_document, spaces::line_comments)))` -- an explicit
-      document may be empty (`Content::Empty`). Same-line content (`--- foo`) already works through
-      `bare_document` → `flow_in_block`'s leading `separate`; `---\nfoo` works via the
-      comment/line-break path of `separate_lines`.
-- [ ] **5c. `document.rs::directive_document`** (`l-directive-document`):
-      `preceded(repeat(1.., directive).map(|()| ()), explicit_document)`.
-- [ ] **5d. Re-check `yaml_stream`'s dispatch** (`document.rs:32-43`): the `'-'` arm now reaches a
-      real `explicit_document`; add a `'%'` arm → `directive_document.map(Some)` (only
-      `any_document`'s alt covers directives today, and only for the first document).
-- [ ] **5e. Per-document state reset.** Anchors are document-scoped
-      ([§3.2.2.2](https://yaml.org/spec/1.2.2/#3222-anchors-and-aliases)) and so is the `%TAG` map:
-      add `clear()` to `AnchorStore`/`TagHandles` and call them at each document boundary in
-      `yaml_stream`'s loop. Also do Phase 1g (`c-forbidden` in multi-line plains) now if it was
-      deferred -- multi-document conformance cases will fail without it.
-- [ ] **5f. Tests.** Spec §6.8 examples 6.13–6.22 (directives) and §9.1/9.2 examples 9.1–9.6
-      (documents/streams); a multi-document end-to-end test (`---` + `...` + directives).
+- [x] **5a. New `parse/directive.rs`**. Landed close to plan, with one structural deviation (see
+      below): `directive` ([`l-directive`](https://yaml.org/spec/1.2.2/#rule-l-directive)) is
+      `terminated(preceded('%', directive_body), spaces::line_comments)`; `yaml_directive`
+      (`ns-yaml-directive`) + `yaml_version` (`ns-yaml-version`: `dec_digits '.' dec_digits` →
+      `(u32, u32)`) hard-errors on major ≠ 1 and silently accepts any minor version (no warning
+      channel exists, noted in the doc comment); `tag_directive` (`ns-tag-directive`) parses
+      `"TAG"`, `properties::tag_handle` (widened from private to `pub(super)` so this sibling
+      module could reuse it), and `tag_prefix` (`ns-tag-prefix`: `local_tag_prefix` = `!` +
+      `ns-uri-char*`, or `global_tag_prefix` = a tag char + `ns-uri-char*`), returning a `Directive`
+      value for the caller to register/validate (registration itself needs `&mut Input`, which
+      `directive()` doesn't have, so it stays the caller's job -- see 5c); `reserved_directive`
+      (`ns-reserved-directive`) consumes a name + optional parameters and is ignored.
+      **Deviation**: `directive` does *not* dispatch via a plain
+      `alt((yaml_directive, tag_directive, reserved_directive))` as planned. `reserved_directive`'s
+      name grammar (`ns-char+`) also matches the literal `"YAML"`/`"TAG"`, so with a backtracking
+      `alt`, a malformed `%YAML`/`%TAG` body (e.g. `%YAML 2.0`, an unsupported major version) would
+      silently backtrack out of `yaml_directive` and get reinterpreted by `reserved_directive` as
+      an unrelated, ignored directive -- accepting exactly the input the version check exists to
+      reject. Fixed with a small hand-rolled `directive_body` that peeks the directive name first
+      (via `peek(directive_name)`) and dispatches to `yaml_directive`/`tag_directive`/
+      `reserved_directive` by exact-match, so once the name is unambiguously `"YAML"` or `"TAG"`,
+      any further failure is a hard error rather than a fall-through. (A `cut_err`-based fix was
+      tried first and reverted: `cut_err` requires `Error: ModalError`, which this crate's shared
+      `ParserError` trait alias can't add without breaking every other caller -- `winnow::Result<O,
+      E>` is a bare `Result<O, E>`, not `Result<O, ErrMode<E>>`, so `ContextError` itself (the
+      concrete type used everywhere, including `tests/integration_tests.rs`) never implements
+      `ModalError`, only `ErrMode<ContextError>` does.)
+- [x] **5b. `document.rs::explicit_document`**: `preceded(directives_end, alt((bare_document,
+      terminated(empty.value(Node::unspecified(Content::Empty)), spaces::line_comments).map(
+      Document::new))))`, plus a `directives_end` rule fn (`c-directives-end` = literal `"---"`).
+      Matches the plan; same-line (`--- foo`) and next-line (`---\nfoo`) content both work through
+      `bare_document`'s existing separation handling, no changes needed there.
+- [x] **5c. `document.rs::directive_document`**. Not the planned
+      `preceded(repeat(1.., directive).map(|()| ()), explicit_document)`: a plain `repeat` can't
+      register a `%TAG` handle (needs `&mut Input`) or detect a duplicate `%YAML`/handle (needs
+      state across iterations) from inside a combinator chain, so it's a hand-rolled loop that
+      calls `directive::directive` once per line, tracks `seen_yaml: bool` and
+      `seen_handles: HashSet<&str>`, calls `input.tag_handles_mut().put(...)` for each accepted
+      `%TAG`, and returns a hard `Err` (with a `StrContext` message) the moment either is violated,
+      before falling through to `explicit_document` once at least one directive parsed. Verified
+      against spec example 6.15 ("Invalid Repeated TAG Directive") and an analogous duplicate-
+      `%YAML` case, both via direct `testing::parse(directive_document, ...)` calls (going through
+      `yaml_stream` wouldn't observe the failure -- see 5d's note on why).
+- [x] **5d. `yaml_stream`'s dispatch**: the `'-'` arm now calls the real `explicit_document`, as
+      planned. **The planned `'%' => directive_document.map(Some)` arm was added, tested, then
+      *removed* again -- it was wrong.** `l-yaml-stream`'s grammar is
+      `prefix* any_document? ( suffix+ prefix* any_document? | prefix* explicit_document? )*`: each
+      loop iteration is *either* the suffix branch (peeked `.`: one or more `...`, then *any* kind
+      of document) *or* the no-suffix branch (peeked `-`: *only* an explicit, `---`-prefixed
+      document -- never a fresh directive or bare document without an intervening `...`). A
+      standalone `'%'` arm let a directive start a *second* document with no preceding `...`, which
+      is exactly what corpus cases `9HCY` ("Need document footer before directives"), `EB22`
+      ("Missing document-end marker before directive"), `RHX7` ("YAML directive without document
+      end marker") and `MUS6/01` ("Directive variants") say must be rejected -- adding the arm
+      turned all four from correctly-erroring into `UnexpectedSuccessOnErrorCase` (previously 0,
+      per Phase 7). Removed the arm entirely: a bare `'%'` at loop-top now falls to the catch-all
+      arm, fails to parse as a comment, and correctly ends the stream leaving it unconsumed. A
+      directive is still reachable exactly where the grammar allows it: as the very first document
+      (the `initial` computation before the loop) or right after a `...` suffix (already inside the
+      `'.'` arm's `opt(any_document)`, unchanged).
+- [x] **5e. Per-document state reset.** Added `AnchorStore::clear()` (`self.0.clear()`) and
+      `TagHandles::clear()` (`*self = Self::new()`, restoring just the two default handles), and a
+      small `reset_document_state` parser in `document.rs` that calls both; wired via
+      `preceded(reset_document_state, any_document)`/`preceded(reset_document_state,
+      explicit_document)` at every document-boundary call site in `yaml_stream` (the initial
+      document, the `'.'` arm, and the `'-'` arm). Phase 1g's `c-forbidden` exclusion was already
+      landed in Phase 1, but turned out to be *incomplete*: it only covered plain scalars.
+      Multi-line **double-quoted and single-quoted** scalars had no equivalent guard, so a quoted
+      scalar could swallow a `---`/`...` marker line as ordinary content across a fold -- corpus
+      cases `5TRB` ("Invalid document-start marker in doublequoted string"), `RXY3` ("Invalid
+      document-end marker in single quoted string") and `9MQT/01` ("Scalar doc with '...' in
+      content") all rely on this being rejected, and adding real `explicit_document` support (5b)
+      was what first made them reachable enough to expose it as `UnexpectedSuccessOnErrorCase`
+      rather than a total parse failure for an unrelated reason. Fixed the same way Phase 1g fixed
+      plain scalars: in `double::non_break_double_multi_line` and
+      `single::non_break_single_multi_line`, each fold alternative is now `terminated(fold_parser,
+      not(document::forbidden))`, so folding onto a forbidden line makes that alternative fail;
+      `opt(...)` around it then gracefully stops the multi-line loop, leaving the marker line
+      unconsumed for the closing quote to (correctly) never find, failing the scalar as
+      unterminated rather than swallowing the marker as content.
+- [x] **5f. Tests.** `directive.rs`: YAML directive (1.2 accepted, other minors accepted, major 2
+      rejected), TAG directive (secondary/named/local-prefix forms), reserved directive (spec
+      example 6.13's exact text, and a no-parameters case). `document.rs`: `explicit_document`
+      same-line and empty-content cases; duplicate-`%YAML`/duplicate-TAG-handle error cases (the
+      latter is spec example 6.15); full spec-example transcriptions via `yaml_stream` for 9.1
+      (Document Prefix), 9.2 (Document Markers, two bare block sequences with no suffix between
+      them), 9.4 (Explicit Documents, `...`-separated flow mappings), 9.5 (Directives Documents,
+      `%TAG`-redefined primary handle applied to a block mapping), 9.6 (Streams, two
+      `...`-terminated documents -- the multi-document end-to-end case), 6.13 (Reserved
+      Directives), and 6.16 (Tag Shorthands, named + redefined-primary handles on a block
+      sequence). Not every one of 6.14/6.17–6.22 got its own literal transcription (time-boxed);
+      what they'd each add is already covered by the combination of `directive.rs`'s unit tests,
+      `properties.rs`'s existing undeclared-handle test, and the above. Conformance report: 280/402
+      (69.7%) → **369/402 (91.8%)**, the second-largest jump after Phase 4, with
+      `UnexpectedSuccessOnErrorCase` back at 0 (it transiently went to 7 mid-phase from the two
+      bugs described in 5d/5e above, both fixed before landing).
 
 ### Phase 6 -- Tag resolution / Core Schema
 
@@ -682,25 +755,34 @@ range/representation policy lives at the conversion site, not in the value model
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: 280/402 (69.7%)** -- Phase 2 (node properties/anchors)
+      `cargo test`. **Current pass rate: 369/402 (91.8%)** -- Phase 2 (node properties/anchors)
       held flat at 129/402, since those mostly unlock cases that also need block collections
       (Phase 4) to reach content using them. Phase 3 (block scalars) nudged it to 132/402; block
       scalars themselves weren't reachable from real documents yet either (same Phase 4 dependency),
       but fixing a latent `chars::is_non_break` bug along the way (it excluded space, breaking any
-      multi-word comment) unlocked a few flow-style cases with comments. **Phase 4 (block
-      collections) jumped it to 280/402 (69.7%)**, by far the largest single-phase gain -- block
+      multi-word comment) unlocked a few flow-style cases with comments. Phase 4 (block
+      collections) jumped it to 280/402 (69.7%), by far the largest single-phase gain -- block
       collections are most of real-world YAML, and landing them also finally exercised (and
       surfaced latent bugs in) the block-scalar and comment-handling machinery from earlier phases;
       see Phase 4's own writeup above for the three pre-existing bugs this uncovered
-      (`spaces::line_comments`, `spaces::indent_less_than`, `detect_indentation`). Remaining
-      failures are almost entirely `ParseErrorOnValidCase` (112, from directives/explicit documents
-      -- Phase 5 -- and a handful of other unimplemented corners), plus 10 known, out-of-scope
-      mismatches: 5 `StructuralMismatch` in flow-mapping edge cases with entirely-empty flow content
-      (e.g. `{}`-shaped nodes), and 5 `ContentMismatch` -- 3 are the harness not yet surfacing
-      `Tag::NonSpecific` as tag text `"!"` (a Phase 6 harness/tag-resolution concern), 2 are
-      double-quoted-scalar trailing-whitespace edge cases pre-dating this phase. `ParserPanic` and
-      `UnexpectedSuccessOnErrorCase` are both 0. Update this number whenever a phase lands. The real
-      bugs this harness surfaced are now tracked as Phase 0 (and Phase 4) above.
+      (`spaces::line_comments`, `spaces::indent_less_than`, `detect_indentation`). **Phase 5
+      (directives/explicit documents) jumped it to 369/402 (91.8%)**, the second-largest gain --
+      most of the corpus' remaining `ParseErrorOnValidCase` failures were multi-document/directive
+      streams that simply couldn't be reached before; landing it also surfaced (and fixed, see
+      Phase 5's own writeup) two more pre-existing bugs, a missing `c-forbidden` guard in
+      multi-line quoted scalars and a too-permissive `yaml_stream` dispatch arm, both caught because
+      this harness flagged a transient `UnexpectedSuccessOnErrorCase` regression before they were
+      fixed. Remaining failures are 21 `ParseErrorOnValidCase` (mostly Phase 6 tag/anchor-name
+      corners: `!!`-tag validation, anchors containing `:`, tab-indented flow, empty flow
+      collections, and one root-level zero-indented block-literal case unrelated to Phase 5), 5
+      `StructuralMismatch` (flow-mapping edge cases with entirely-empty flow content, e.g.
+      `{}`-shaped nodes), and 7 `ContentMismatch` (4 are the harness not yet surfacing
+      `Tag::NonSpecific` as tag text `"!"`, or a `%XX`-escaped tag suffix not being unescaped for
+      comparison -- both Phase 6 harness/tag-resolution concerns; 2 are double-quoted-scalar
+      trailing-whitespace edge cases pre-dating this phase; 1 is a trailing-blank-lines-in-a-stream
+      edge case). `ParserPanic` and `UnexpectedSuccessOnErrorCase` are both 0. Update this number
+      whenever a phase lands. The real bugs this harness surfaced are now tracked as Phase 0 (and
+      Phase 4, Phase 5) above.
 - [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
 
 ### Phase 8 -- Polish (do last, or opportunistically)

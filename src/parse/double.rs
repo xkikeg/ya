@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{alt, delimited, fail, opt, peek, preceded, repeat, trace},
+    combinator::{alt, delimited, fail, not, opt, peek, preceded, repeat, trace},
     error::{StrContext, StrContextValue},
     stream::AsChar,
     token::{any, literal, one_of, take_while},
@@ -11,6 +11,7 @@ use winnow::{
 use super::{
     chars,
     context::{self, FlowOrKey},
+    document,
     error::ParserError,
     input::InputStream,
     spaces::{self, IndentLevel},
@@ -74,9 +75,24 @@ where
         move |input: &mut Input| {
             let (mut current, mut literal_tail_len) = non_break_double_chars.parse_next(input)?;
             loop {
+                // A multi-line double-quoted scalar must not swallow a `---`/`...` document
+                // marker line either, same as a multi-line plain scalar (see the comment on
+                // `plain::plain` for why this check lives at the fold site rather than at
+                // `l-bare-document` where the spec formally scopes it). Folding onto such a line
+                // makes the whole alternative fail, so `opt` below gracefully treats it as "no
+                // further continuation" and leaves the marker line for the closing quote to (not)
+                // find, correctly failing the scalar as unterminated.
                 let may_break = opt(alt((
-                    double_escaped_line_break(indent_level).map(|s| (false, s)),
-                    spaces::flow_folded(indent_level).map(|s| (true, s)),
+                    (
+                        double_escaped_line_break(indent_level),
+                        not(document::forbidden).void(),
+                    )
+                        .map(|(s, ())| (false, s)),
+                    (
+                        spaces::flow_folded(indent_level),
+                        not(document::forbidden).void(),
+                    )
+                        .map(|(s, ())| (true, s)),
                 )))
                 .parse_next(input)?;
                 let (must_trim, line_break) = match may_break {
