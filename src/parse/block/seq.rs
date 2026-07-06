@@ -108,11 +108,8 @@ mod tests {
     /// belongs to Phase 4's block-mapping tests instead).
     #[test]
     fn block_sequence_example_8_14() {
-        let (rest, got) = testing::parse(
-            block_sequence(IndentLevel::new(0)),
-            "  - one\n  - two\n",
-        )
-        .unwrap();
+        let (rest, got) =
+            testing::parse(block_sequence(IndentLevel::new(0)), "  - one\n  - two\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(vec![plain("one"), plain("two")], got);
     }
@@ -121,7 +118,8 @@ mod tests {
     /// compact-notation entry.
     #[test]
     fn compact_sequence_nested_dash() {
-        let (rest, got) = testing::parse(compact_sequence(IndentLevel::new(2)), "- one\n  - two\n").unwrap();
+        let (rest, got) =
+            testing::parse(compact_sequence(IndentLevel::new(2)), "- one\n  - two\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(vec![plain("one"), plain("two")], got);
     }

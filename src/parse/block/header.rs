@@ -152,46 +152,49 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("block::header::detect_indentation", move |input: &mut Input| {
-        let start = input.checkpoint();
-        let mut max_empty_spaces = 0usize;
-        let mut detected: Option<usize> = None;
-        loop {
-            let spaces: &str = take_while(0.., b' ').parse_next(input)?;
-            let spaces = spaces.len();
-            if input.eof_offset() == 0 {
-                max_empty_spaces = max_empty_spaces.max(spaces);
+    trace(
+        "block::header::detect_indentation",
+        move |input: &mut Input| {
+            let start = input.checkpoint();
+            let mut max_empty_spaces = 0usize;
+            let mut detected: Option<usize> = None;
+            loop {
+                let spaces: &str = take_while(0.., b' ').parse_next(input)?;
+                let spaces = spaces.len();
+                if input.eof_offset() == 0 {
+                    max_empty_spaces = max_empty_spaces.max(spaces);
+                    break;
+                }
+                if chars::line_break::<Input, Error>.parse_next(input).is_ok() {
+                    max_empty_spaces = max_empty_spaces.max(spaces);
+                    continue;
+                }
+                if spaces <= indent_level.get() {
+                    break;
+                }
+                detected = Some(spaces);
                 break;
             }
-            if chars::line_break::<Input, Error>.parse_next(input).is_ok() {
-                max_empty_spaces = max_empty_spaces.max(spaces);
-                continue;
-            }
-            if spaces <= indent_level.get() {
-                break;
-            }
-            detected = Some(spaces);
-            break;
-        }
-        if let Some(d) = detected {
-            if max_empty_spaces > d {
-                let err = Error::from_input(input).add_context(
+            if let Some(d) = detected {
+                if max_empty_spaces > d {
+                    let err = Error::from_input(input).add_context(
                     input,
                     &start,
                     StrContext::Expected(StrContextValue::Description(
                         "a leading all-space line must not have more spaces than the first non-empty line",
                     )),
                 );
-                input.reset(&start);
-                return Err(err);
+                    input.reset(&start);
+                    return Err(err);
+                }
             }
-        }
-        input.reset(&start);
-        Ok(DetectedIndentation {
-            content: detected.map(IndentLevel::new),
-            bound: IndentLevel::new(detected.unwrap_or(max_empty_spaces)),
-        })
-    })
+            input.reset(&start);
+            Ok(DetectedIndentation {
+                content: detected.map(IndentLevel::new),
+                bound: IndentLevel::new(detected.unwrap_or(max_empty_spaces)),
+            })
+        },
+    )
 }
 
 /// Interpretation of the final line break of a block scalar, per its chomping mode.
@@ -205,14 +208,17 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("block::header::chomped_last", move |input: &mut Input| {
-        match chomping {
-            ChompingMode::Strip => alt((chars::line_break.value(""), eof.value(""))).parse_next(input),
+    trace(
+        "block::header::chomped_last",
+        move |input: &mut Input| match chomping {
+            ChompingMode::Strip => {
+                alt((chars::line_break.value(""), eof.value(""))).parse_next(input)
+            }
             ChompingMode::Clip | ChompingMode::Keep => {
                 alt((chars::break_as_line_feed, eof.value(""))).parse_next(input)
             }
-        }
-    })
+        },
+    )
 }
 
 /// Interpretation of the trailing empty lines following a block scalar, per its chomping mode.
@@ -227,15 +233,16 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("block::header::chomped_empty", move |input: &mut Input| {
-        match chomping {
+    trace(
+        "block::header::chomped_empty",
+        move |input: &mut Input| match chomping {
             ChompingMode::Strip | ChompingMode::Clip => {
                 strip_empty(indent_level).parse_next(input)?;
                 Ok(Cow::Borrowed(""))
             }
             ChompingMode::Keep => keep_empty(indent_level).parse_next(input),
-        }
-    })
+        },
+    )
 }
 
 /// Trailing empty lines discarded by Strip/Clip chomping.
@@ -278,7 +285,8 @@ where
     Error: ParserError<Input>,
 {
     trace("block::header::keep_empty", move |input: &mut Input| {
-        let count: usize = repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
+        let count: usize =
+            repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
         opt(trail_comments(indent_level)).parse_next(input)?;
         if count > 0 {
             Ok(Cow::Owned("\n".repeat(count)))
@@ -360,7 +368,11 @@ mod tests {
         );
         assert_eq!(
             ("strip\n", (Some(1), ChompingMode::Strip)),
-            testing::parse(block_header, "-1 # Both indicators, reversed order\nstrip\n").unwrap()
+            testing::parse(
+                block_header,
+                "-1 # Both indicators, reversed order\nstrip\n"
+            )
+            .unwrap()
         );
     }
 

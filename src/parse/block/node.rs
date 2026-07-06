@@ -191,7 +191,8 @@ where
         alt((
             seq::compact_sequence(indent_level)
                 .map(|entries| Node::unspecified(Content::Seq(entries))),
-            map::compact_mapping(indent_level).map(|mapping| Node::unspecified(Content::Map(mapping))),
+            map::compact_mapping(indent_level)
+                .map(|mapping| Node::unspecified(Content::Map(mapping))),
         ))
         .parse_next(input)
     })

@@ -37,7 +37,9 @@ where
                 // `bound` (which can be a degenerate, always-matching `s-indent(0)`).
                 let detected = header::detect_indentation(indent_level).parse_next(input)?;
                 match detected.content {
-                    Some(content_indent) => folded_content(content_indent, chomping).parse_next(input),
+                    Some(content_indent) => {
+                        folded_content(content_indent, chomping).parse_next(input)
+                    }
                     None => header::chomped_empty(detected.bound, chomping).parse_next(input),
                 }
             }
@@ -131,12 +133,15 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("block::folded::break_line_spaced", move |input: &mut Input| {
-        chars::break_as_line_feed.parse_next(input)?;
-        let count: usize =
-            repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
-        Ok(Cow::Owned("\n".repeat(count + 1)))
-    })
+    trace(
+        "block::folded::break_line_spaced",
+        move |input: &mut Input| {
+            chars::break_as_line_feed.parse_next(input)?;
+            let count: usize =
+                repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
+            Ok(Cow::Owned("\n".repeat(count + 1)))
+        },
+    )
 }
 
 /// Consecutive [`spaced_text`] lines, joined by literal breaks via [`break_line_spaced`].
@@ -179,7 +184,8 @@ where
     trace("block::folded::same_lines", move |input: &mut Input| {
         let count: usize =
             repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
-        let rest = alt((folded_lines(indent_level), spaced_lines(indent_level))).parse_next(input)?;
+        let rest =
+            alt((folded_lines(indent_level), spaced_lines(indent_level))).parse_next(input)?;
         if count > 0 {
             let mut s = "\n".repeat(count);
             s.push_str(&rest);

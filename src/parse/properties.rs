@@ -207,7 +207,12 @@ where
             1..,
             alt((
                 one_of(chars::is_tag_char).void(),
-                ('%', one_of(|c: char| c.is_ascii_hexdigit()), one_of(|c: char| c.is_ascii_hexdigit())).void(),
+                (
+                    '%',
+                    one_of(|c: char| c.is_ascii_hexdigit()),
+                    one_of(|c: char| c.is_ascii_hexdigit()),
+                )
+                    .void(),
             )),
         )
         .map(|()| ())
@@ -225,11 +230,7 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "properties::anchor_property",
-        preceded('&', anchor_name),
-    )
-    .parse_next(input)
+    trace("properties::anchor_property", preceded('&', anchor_name)).parse_next(input)
 }
 
 /// Anchor name: one or more non-space chars, excluding flow indicators.
@@ -245,7 +246,9 @@ where
 {
     trace(
         "properties::anchor_name",
-        take_while(1.., |c| chars::is_non_space(c) && !chars::is_flow_indicator(c)),
+        take_while(1.., |c| {
+            chars::is_non_space(c) && !chars::is_flow_indicator(c)
+        }),
     )
     .parse_next(input)
 }
@@ -311,8 +314,11 @@ mod tests {
 
     #[test]
     fn tag_then_anchor() {
-        let (rest, props) =
-            testing::parse(properties(FlowOut, IndentLevel::initial()), "!!str &a1 rest").unwrap();
+        let (rest, props) = testing::parse(
+            properties(FlowOut, IndentLevel::initial()),
+            "!!str &a1 rest",
+        )
+        .unwrap();
         assert_eq!(" rest", rest);
         assert_eq!(Some("a1"), props.anchor);
         assert_eq!(
@@ -326,8 +332,11 @@ mod tests {
 
     #[test]
     fn anchor_then_tag() {
-        let (rest, props) =
-            testing::parse(properties(FlowOut, IndentLevel::initial()), "&a2 !!str rest").unwrap();
+        let (rest, props) = testing::parse(
+            properties(FlowOut, IndentLevel::initial()),
+            "&a2 !!str rest",
+        )
+        .unwrap();
         assert_eq!(" rest", rest);
         assert_eq!(Some("a2"), props.anchor);
         assert_eq!(

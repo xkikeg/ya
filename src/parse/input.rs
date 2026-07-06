@@ -127,7 +127,9 @@ impl<'i> TrackStartOfLine for Input<'i> {
 
     fn previous_char(&self) -> Option<char> {
         use stream::Location as _;
-        self.original[..self.inner.previous_token_end()].chars().next_back()
+        self.original[..self.inner.previous_token_end()]
+            .chars()
+            .next_back()
     }
 }
 
