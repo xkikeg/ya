@@ -64,8 +64,11 @@ mod tests {
 
     #[test]
     fn block_scalar_literal() {
-        let (rest, got) =
-            testing::parse(block_scalar(BlockOut, IndentLevel::initial()), " |\n  text\n").unwrap();
+        let (rest, got) = testing::parse(
+            block_scalar(BlockOut, IndentLevel::initial()),
+            " |\n  text\n",
+        )
+        .unwrap();
         assert_eq!("", rest);
         assert_eq!(
             Node::unspecified(Content::Scalar(Scalar::Literal(Cow::Owned(
@@ -77,8 +80,11 @@ mod tests {
 
     #[test]
     fn block_scalar_folded() {
-        let (rest, got) =
-            testing::parse(block_scalar(BlockOut, IndentLevel::initial()), " >\n  text\n").unwrap();
+        let (rest, got) = testing::parse(
+            block_scalar(BlockOut, IndentLevel::initial()),
+            " >\n  text\n",
+        )
+        .unwrap();
         assert_eq!("", rest);
         assert_eq!(
             Node::unspecified(Content::Scalar(Scalar::Folded(Cow::Owned(

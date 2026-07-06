@@ -72,8 +72,7 @@ where
     trace(
         "double::non_break_double_multi_line",
         move |input: &mut Input| {
-            let (mut current, mut literal_tail_len) =
-                non_break_double_chars.parse_next(input)?;
+            let (mut current, mut literal_tail_len) = non_break_double_chars.parse_next(input)?;
             loop {
                 let may_break = opt(alt((
                     double_escaped_line_break(indent_level).map(|s| (false, s)),
@@ -323,7 +322,10 @@ mod tests {
     fn non_break_double_chars_no_escape() {
         let input = "foo bar\t\x7f\"";
         assert_eq!(
-            ("\"", (Cow::Borrowed("foo bar\t\x7f"), "foo bar\t\x7f".len())),
+            (
+                "\"",
+                (Cow::Borrowed("foo bar\t\x7f"), "foo bar\t\x7f".len())
+            ),
             testing::parse(non_break_double_chars, input).unwrap()
         );
     }

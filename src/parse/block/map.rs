@@ -242,7 +242,8 @@ mod tests {
     /// Spec example 8.16 "Block Mappings" (the mapping value only).
     #[test]
     fn block_mapping_example_8_16() {
-        let (rest, got) = testing::parse(block_mapping(IndentLevel::new(0)), " key: value\n").unwrap();
+        let (rest, got) =
+            testing::parse(block_mapping(IndentLevel::new(0)), " key: value\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(Mapping(vec![entry(plain("key"), plain("value"))]), got);
     }
@@ -273,7 +274,8 @@ mod tests {
     /// of a block sequence entry.
     #[test]
     fn compact_mapping_example_8_19() {
-        let (rest, got) = testing::parse(compact_mapping(IndentLevel::new(2)), "sun: yellow\n").unwrap();
+        let (rest, got) =
+            testing::parse(compact_mapping(IndentLevel::new(2)), "sun: yellow\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(Mapping(vec![entry(plain("sun"), plain("yellow"))]), got);
     }

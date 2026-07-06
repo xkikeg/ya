@@ -72,24 +72,21 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "flow::node::flow_json_node",
-        move |input: &mut Input| {
-            let start = input.checkpoint();
-            let props = opt((
-                properties::properties(context, indent_level),
-                spaces::separate(context, indent_level),
-            ))
-            .parse_next(input)?
-            .map(|(props, ())| props);
-            let value = flow_json_content(context, indent_level).parse_next(input)?;
-            let (anchor, tag) = match props {
-                Some(properties::Properties { anchor, tag }) => (anchor, tag),
-                None => (None, None),
-            };
-            properties::build_node(input, &start, anchor, tag, value)
-        },
-    )
+    trace("flow::node::flow_json_node", move |input: &mut Input| {
+        let start = input.checkpoint();
+        let props = opt((
+            properties::properties(context, indent_level),
+            spaces::separate(context, indent_level),
+        ))
+        .parse_next(input)?
+        .map(|(props, ())| props);
+        let value = flow_json_content(context, indent_level).parse_next(input)?;
+        let (anchor, tag) = match props {
+            Some(properties::Properties { anchor, tag }) => (anchor, tag),
+            None => (None, None),
+        };
+        properties::build_node(input, &start, anchor, tag, value)
+    })
 }
 
 /// Parses `c-ns-properties(n,c)` followed by optional content (`e-scalar` when absent), and
@@ -109,17 +106,20 @@ where
     Error: ParserError<Input>,
     C: Parser<Input, Content<'i>, Error>,
 {
-    trace("flow::node::node_with_properties", move |input: &mut Input| {
-        let start = input.checkpoint();
-        let props = properties::properties(context, indent_level).parse_next(input)?;
-        let value = opt(preceded(
-            spaces::separate(context, indent_level),
-            content.by_ref(),
-        ))
-        .parse_next(input)?
-        .unwrap_or(Content::Empty);
-        properties::build_node(input, &start, props.anchor, props.tag, value)
-    })
+    trace(
+        "flow::node::node_with_properties",
+        move |input: &mut Input| {
+            let start = input.checkpoint();
+            let props = properties::properties(context, indent_level).parse_next(input)?;
+            let value = opt(preceded(
+                spaces::separate(context, indent_level),
+                content.by_ref(),
+            ))
+            .parse_next(input)?
+            .unwrap_or(Content::Empty);
+            properties::build_node(input, &start, props.anchor, props.tag, value)
+        },
+    )
 }
 
 #[cfg(test)]
@@ -156,11 +156,8 @@ mod tests {
 
     #[test]
     fn flow_node_anchor_only_defaults_to_unspecified_tag() {
-        let (rest, node) = testing::parse(
-            flow_node(FlowIn, IndentLevel::initial()),
-            "&a2 baz,rest",
-        )
-        .unwrap();
+        let (rest, node) =
+            testing::parse(flow_node(FlowIn, IndentLevel::initial()), "&a2 baz,rest").unwrap();
         assert_eq!(",rest", rest);
         assert_eq!(
             Node::unspecified(Content::Scalar(Scalar::Plain(Cow::Borrowed("baz")))),

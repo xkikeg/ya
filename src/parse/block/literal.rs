@@ -37,7 +37,9 @@ where
                 // `bound` (which can be a degenerate, always-matching `s-indent(0)`).
                 let detected = header::detect_indentation(indent_level).parse_next(input)?;
                 match detected.content {
-                    Some(content_indent) => literal_content(content_indent, chomping).parse_next(input),
+                    Some(content_indent) => {
+                        literal_content(content_indent, chomping).parse_next(input)
+                    }
                     None => header::chomped_empty(detected.bound, chomping).parse_next(input),
                 }
             }
@@ -109,29 +111,32 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace("block::literal::literal_content", move |input: &mut Input| {
-        let mut current: Cow<str> = match opt(literal_text(indent_level)).parse_next(input)? {
-            Some(mut text) => {
-                loop {
-                    match opt(literal_next(indent_level)).parse_next(input)? {
-                        Some(next) => text.to_mut().push_str(&next),
-                        None => break,
+    trace(
+        "block::literal::literal_content",
+        move |input: &mut Input| {
+            let mut current: Cow<str> = match opt(literal_text(indent_level)).parse_next(input)? {
+                Some(mut text) => {
+                    loop {
+                        match opt(literal_next(indent_level)).parse_next(input)? {
+                            Some(next) => text.to_mut().push_str(&next),
+                            None => break,
+                        }
                     }
+                    let last = header::chomped_last(chomping).parse_next(input)?;
+                    if !last.is_empty() {
+                        text.to_mut().push_str(last);
+                    }
+                    text
                 }
-                let last = header::chomped_last(chomping).parse_next(input)?;
-                if !last.is_empty() {
-                    text.to_mut().push_str(last);
-                }
-                text
+                None => Cow::Borrowed(""),
+            };
+            let trailing = header::chomped_empty(indent_level, chomping).parse_next(input)?;
+            if !trailing.is_empty() {
+                current.to_mut().push_str(&trailing);
             }
-            None => Cow::Borrowed(""),
-        };
-        let trailing = header::chomped_empty(indent_level, chomping).parse_next(input)?;
-        if !trailing.is_empty() {
-            current.to_mut().push_str(&trailing);
-        }
-        Ok(current)
-    })
+            Ok(current)
+        },
+    )
 }
 
 #[cfg(test)]
@@ -159,8 +164,7 @@ mod tests {
 
     #[test]
     fn literal_keep_keeps_trailing_empty_lines() {
-        let (rest, got) =
-            testing::parse(literal(IndentLevel::new(0)), "|+\n  text\n").unwrap();
+        let (rest, got) = testing::parse(literal(IndentLevel::new(0)), "|+\n  text\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(Cow::<str>::Owned("text\n".to_string()), got);
     }
