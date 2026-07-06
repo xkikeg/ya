@@ -34,8 +34,10 @@ Consequences of this design for how you should work here:
 
 ```
 src/
-  lib.rs             re-exports `parse` and `value`
+  lib.rs             re-exports `parse`, `resolve`, and `value`
   value.rs            output data model (Stream, Document, Node, Content, Scalar, Mapping, Tag)
+                        + Construct-phase accessors (Node::is_null/as_bool/as_str/as_i64/as_f64)
+  resolve.rs          Core Schema tag resolution post-pass (`resolve(Stream) -> Result<Stream, _>`)
   parse.rs            module root, re-exports `yaml_stream` as the public entry point
   parse/
     error.rs          ParserError trait alias (winnow error bounds used throughout)
@@ -127,12 +129,20 @@ Roughly implemented and unit-tested:
   more directives + an explicit document, with duplicate-`%YAML`/duplicate-handle detection) are
   both implemented and wired into `yaml_stream`'s dispatch, including per-document anchor/tag-handle
   reset (`AnchorStore::clear`/`TagHandles::clear`). See Phase 5 below (now complete).
+- Tag resolution / Core Schema (`resolve.rs`): a post-pass, `resolve(Stream) -> Result<Stream,
+  ResolveError>`, rewriting `Node::tag` only (never scalar content) -- `Tag::Unspecified` resolves
+  by node kind (collections by kind, an empty node to null, a plain scalar via the core-schema
+  classifiers, any other scalar style to `str`), `Tag::Global` values matching one of the seven
+  canonical `tag:yaml.org,2002:*` URIs (after percent-decoding) resolve to `Tag::Standard` with
+  content validated against that tag, and any other `Global` stays as-is (a custom/local tag).
+  `Tag::NonSpecific` is deliberately left un-resolved (see Phase 6's own writeup for why). Typed
+  accessors on `Node` (`is_null`/`as_bool`/`as_str`/`as_i64`/`as_f64`) interpret `(tag, text)` on
+  demand for callers who want native values. See Phase 6 below (now complete).
 
-Not implemented (stub returns `fail`, or missing outright) -- these are exactly the blockers a
-`cargo build` warning-free pass would still leave semantically incomplete:
-- Tag resolution / Core Schema (turning an unspecified-tag plain scalar into `Null`/`Bool`/`Int`/
-  `Float`/string per the core schema) is deferred by design (see comment in `plain.rs::plain`) but
-  nothing implements that later stage yet either.
+There is no longer any parser rule that's a `fail` stub or otherwise unimplemented outright --
+every grammar production in the architecture list above is reachable from `yaml_stream`. Remaining
+gaps are corpus-level edge cases (see Phase 7's conformance breakdown) and the Phase 8 polish list,
+not missing grammar.
 
 ## Conventions worth knowing before touching code
 
@@ -183,7 +193,8 @@ Not implemented (stub returns `fail`, or missing outright) -- these are exactly 
   `data-2022-01-17`.
 - The integration test both checks "error cases fail to parse" and, for valid cases, structurally
   compares the parse against the suite's `test.event` fixture (representation-level: node shape,
-  scalar content, resolved tag -- not presentation style or anchor names; see Phase 7 below for why).
+  scalar content, explicitly-written tag -- not presentation style, anchor names, or the
+  fully-resolved tag of an implicitly-tagged node; see Phase 6d and Phase 7 below for why).
   Run `cargo test --test integration_tests conformance_report -- --nocapture` (or just read
   `target/yaml_conformance_report.txt` after any `cargo test`) for the current pass-rate breakdown.
 - `benches/benchmark.rs` (Criterion) benchmarks `flow_sequence` only today; its own comment notes
@@ -664,7 +675,20 @@ code, but all were blockers for it):
       `UnexpectedSuccessOnErrorCase` back at 0 (it transiently went to 7 mid-phase from the two
       bugs described in 5d/5e above, both fixed before landing).
 
-### Phase 6 -- Tag resolution / Core Schema
+### Phase 6 -- Tag resolution / Core Schema -- DONE
+
+**Deviation from the design decision below, discovered while landing 6a: `Tag::NonSpecific` is
+*not* rewritten to `Tag::Standard` by `resolve()`.** Checked directly against the yaml-test-suite
+corpus (cases `52DL`/`8MK2`, "Explicit Non-Specific Tag"): `test.event` records an explicitly
+written `!` as the literal tag text `"!"`, not as its resolved kind
+(`tag:yaml.org,2002:str`/`:map`/`:seq`) -- i.e. the reference event stream operates at the
+*representation* level (what was written), not the *construct* level (what it would ultimately
+become). Rewriting `NonSpecific` away here would both contradict that ground truth (regressing
+those two cases back to `ContentMismatch`) and discard real information -- *why* a node is being
+treated as str/map/seq (an explicit non-specific tag vs. core-schema classification) stops being
+recoverable once erased. `resolve.rs`'s own module docs carry the full writeup. Construct-phase
+consumers that don't care about the distinction (`Node::as_str()`, see 6e) treat `NonSpecific` as
+equivalent to its forced kind directly, without needing `resolve()` to have erased it first.
 
 **Design decision (maintainer-approved 2026-07-05): resolution is *tag-only*, and the native
 `Scalar::Null`/`Bool(bool)`/`Int(i64)`/`Float(f64)` variants have been deleted from
@@ -698,37 +722,72 @@ range/representation policy lives at the conversion site, not in the value model
   or serde layer against the integer type the *caller* asked for, which is the semantics serde
   users expect anyway.
 
-- [ ] **6a. New `src/resolve.rs` post-pass** (post-pass keeps parsing schema-agnostic, consistent
-      with the deferral comment in `plain.rs::plain`): `pub fn resolve(Stream) -> Result<Stream, ResolveError>`
-      walking every node and rewriting *tags only* (see design note above; scalar content is
-      untouched in every arm). `Tag::Unspecified` + `Scalar::Plain` → core-schema match (6b) →
-      `Tag::Standard(Null|Bool|Int|Float)` or `Standard(Str)` on no match;
-      `Unspecified` + any other scalar style (single/double/literal/folded) → `Standard(Str)`;
-      `Unspecified` collections → `Standard(Map)`/`Standard(Seq)`;
-      `Tag::NonSpecific` → str/map/seq by node kind. (The four native `Scalar` variants and the
-      harness's placeholder match arms were already deleted when this design was decided.)
-- [ ] **6b. Core-schema matchers** ([§10.3.2](https://yaml.org/spec/1.2.2/#1032-tag-resolution)),
-      hand-written (no `regex` dependency), classifying text → `StandardTag` (not constructing
-      values): null `null|Null|NULL|~|<empty>`; bool
-      `true|True|TRUE|false|False|FALSE`; int `[-+]? [0-9]+`, `0o[0-7]+`, `0x[0-9a-fA-F]+`; float
-      `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?`, `[-+]? \.(inf|Inf|INF)`,
-      `\.(nan|NaN|NAN)`. (Under tag-only resolution these are pure classifiers; `i64` range is
-      irrelevant here -- see 6e for where overflow policy now lives.)
-- [ ] **6c. Explicit standard tags**: map `tag:yaml.org,2002:{str,null,bool,int,float,map,seq}`
-      `Tag::Global` values to `Tag::Standard`, *validating* (via the 6b classifiers) that the
-      content is well-formed for the forced tag and erroring when it isn't (e.g. `!!int foo`);
-      content itself stays untouched.
-- [ ] **6d. Harness**: call `resolve()` in `tests/integration_tests.rs` before the `ExpectedNode`
-      comparison; this should clear most remaining `ContentMismatch` failures. (Text-vs-text
-      comparison keeps working unchanged because resolution no longer rewrites content.)
-- [ ] **6e. Construct-phase accessors**: `Node::as_str()` / `as_bool()` / `as_i64()` / `is_null()`
-      etc., interpreting `(Tag::Standard(..), text)` on demand (e.g. `as_i64` parses decimal/octal/
-      hex per the matched int form). This is where the old open-question-3 overflow policy lands:
-      `as_i64` returns `None`/error on overflow while the node itself stays valid; a serde
-      `Deserialize` impl (Phase 8) gets the same behavior per requested type for free.
-- [ ] **6f. Tests**: the §10.3.2 resolution table and example 10.9 verbatim, plus accessor
-      round-trips for each int form (`0o7`, `0x1A`, `-12`) and an `i64`-overflow case asserting
-      the node survives and only the conversion fails.
+- [x] **6a. New `src/resolve.rs` post-pass**: `pub fn resolve(Stream) -> Result<Stream, ResolveError>`
+      landed close to plan, minus the `Tag::NonSpecific` deviation noted above.
+      `Tag::Unspecified` + `Content::Empty` → `Standard(Null)` (the table's `/* Empty */` row);
+      `Unspecified` + `Scalar::Plain` → core-schema match (6b) → `Standard(Null|Bool|Int|Float)` or
+      `Standard(Str)` on no match; `Unspecified` + any other scalar style → `Standard(Str)`;
+      `Unspecified` collections → `Standard(Map)`/`Standard(Seq)`. `resolve_content` recurses into
+      `Seq`/`Map` children before resolving the parent's own tag (order doesn't actually matter for
+      correctness here, since a node's resolution never depends on its children's resolved tags,
+      but the recursion has to happen somewhere to reach every node in the tree).
+- [x] **6b. Core-schema matchers** ([§10.3.2](https://yaml.org/spec/1.2.2/#1032-tag-resolution)),
+      hand-written (no `regex` dependency), classifying text → `StandardTag`: null
+      `null|Null|NULL|~|<empty>`; bool `true|True|TRUE|false|False|FALSE`; int `[-+]? [0-9]+`,
+      `0o[0-7]+`, `0x[0-9a-fA-F]+`; float `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]?
+      [0-9]+ )?`, `[-+]? \.(inf|Inf|INF)`, `\.(nan|NaN|NAN)` -- confirmed verbatim against the
+      spec's own source (`yaml/yaml-spec` repo, `spec/1.2.2/spec.md`, since the live HTML page
+      truncates before reaching Chapter 10 when fetched). Implemented as small string/char
+      predicates (`is_dec_int`/`is_radix_int`/`is_float_mantissa`/...), avoiding char-array
+      patterns like `strip_prefix(['-', '+'])` since those need Rust 1.71, one past this crate's
+      declared `rust-version = "1.70.0"` (a real MSRV violation caught mid-implementation, not a
+      hypothetical -- fixed with a two-line `strip_sign` helper instead).
+- [x] **6c. Explicit standard tags**: `Tag::Global` values are percent-decoded (see 6f's note on
+      `%XX` escapes) then matched against the seven canonical `tag:yaml.org,2002:*` URIs; a match
+      becomes `Tag::Standard`, *validated* (via the 6b classifiers plus a node-kind check for
+      map/seq/str) against the content it was applied to, erroring (`ResolveError::KindMismatch` /
+      `ContentMismatch`) when it doesn't fit (e.g. `!!int foo`, `!!map` on a scalar); a non-canonical
+      URI (a custom/local tag) stays `Tag::Global`, decoded but otherwise untouched.
+- [x] **6d. Harness**: `check_input` now calls `resolve()` on `ya`'s parsed stream, treating a
+      `ResolveError` as a `ContentMismatch` (a real bug, since no valid corpus case should fail
+      Core Schema validation). **Deviation query resolved as its own scope decision**: the plan's
+      "this should clear most remaining `ContentMismatch` failures" turns out to depend on *not*
+      comparing resolved tags 1:1 for every node, contrary to a naive reading of "call resolve()
+      before comparison" -- `test.event` only ever records a tag when the source *explicitly wrote
+      one* (confirmed against several corpus fixtures directly: an implicit/untagged scalar simply
+      has no `<tag>` token), while `resolve()` assigns *every* node a concrete `Standard` kind. A
+      literal 1:1 comparison would therefore turn nearly the *entire* corpus (every untagged plain
+      scalar, mapping, sequence) into a tag mismatch -- the opposite of the stated goal. Fixed by
+      adding `tags_match(expected, actual)`: `expected == None` always matches (the harness doesn't
+      have ground truth for an implicitly-resolved tag, so -- like presentation style and anchor
+      names -- it's declared out of scope, see `tags_match`'s doc comment), while `expected ==
+      Some(_)` still requires an exact match. Also fixed `tag_uri`'s `NonSpecific => None`
+      placeholder to `Some("!".to_string())`, matching the corpus ground truth from the deviation
+      above.
+- [x] **6e. Construct-phase accessors**: `Node::is_null()` / `as_bool()` / `as_str()` / `as_i64()`
+      / `as_f64()`, interpreting `(tag, text)` on demand, landed in `value.rs` right on `Node`
+      itself (not a separate module) since they're small and tightly coupled to its fields.
+      `as_i64` parses decimal/`0o`/`0x` forms, returning `None` on `i64` overflow (the old open
+      design question 3's overflow policy) rather than erroring -- the node stays valid, only the
+      conversion fails. `as_str` also accepts `Tag::NonSpecific` (equivalent to `Standard(Str)` for
+      a scalar node), per the 6a deviation: this is exactly where "treat non-specific as its forced
+      kind" ends up living, without `resolve()` needing to erase the distinction itself. Added
+      `as_f64` (float) too, alongside the plan's explicitly-named four, for a complete
+      one-accessor-per-`StandardTag`-scalar-variant set.
+- [x] **6f. Tests**: the §10.3.2 resolution table transcribed verbatim (`resolve::tests::
+      core_schema_table`) plus the Core Schema's own worked example ("Core Tag Resolution", same
+      section) transcribed as a flow mapping (`core_tag_resolution_example`) -- both checked
+      against the spec's actual source text (see 6b's note on where), not from memory. Accessor
+      round-trips for each int form (`0o7`, `0x1A`, `-12`, `+12`) and an `i64`-overflow case
+      asserting the node survives and only `as_i64()` returns `None`, in `value.rs`. Also: a
+      percent-decoding regression test transcribing corpus case `6CK3` ("Spec Example 6.26. Tag
+      Shorthands", `tag%21` → `tag!`) and a `Tag::NonSpecific`-survives-resolution test transcribing
+      the reasoning behind the 6a deviation.
+
+Conformance: 374/402 (93.0%), up from 369/402 (91.8%) before this phase -- `ContentMismatch`
+dropped from 7 to 2 (the remaining 2 are the pre-existing double-quoted-scalar trailing-whitespace
+edge cases, unrelated to tag resolution; see Phase 7's own note). No regressions in any other
+category.
 
 ### Phase 7 -- Conformance harness
 
@@ -744,9 +803,13 @@ range/representation policy lives at the conversion site, not in the value model
       `value::Mapping::entries()` (their backing `Vec`s were `pub(crate)`, which is exactly why this
       TODO couldn't be done from `tests/` -- an external crate -- before).
       **Deliberately out of scope**: presentation style (plain vs. single-quoted, flow vs. block) and
-      anchor *names* are not compared, because `value::Node` can't represent either yet -- comparison
-      focuses on the representation graph (shape + content + resolved tag), matching this crate's
-      stated end goal of serde/Construct-phase deserialization over presentation round-tripping.
+      anchor *names* are not compared, because `value::Node` can't represent either yet; the
+      fully-resolved tag of an *implicitly*-tagged node isn't compared either (added once Phase 6's
+      `resolve()` existed to make the distinction matter -- see 6d's writeup and `tags_match`'s doc
+      comment in `tests/integration_tests.rs`) since `test.event` has no ground truth for it.
+      Comparison focuses on the representation graph (shape + content + explicit tag), matching
+      this crate's stated end goal of serde/Construct-phase deserialization over presentation
+      round-tripping.
 - [x] Track/report pass rate: `tests/integration_tests.rs::conformance_report` (a plain, non-ignored,
       never-failing `#[test]`) walks the whole corpus, tallies pass/fail by category (adding
       `UnexpectedSuccessOnErrorCase` for error-cases the parser wrongly accepts, `MalformedFixture`
@@ -755,7 +818,7 @@ range/representation policy lives at the conversion site, not in the value model
       one crashing input can't lose the whole report), and writes a full breakdown to both stdout and
       `target/yaml_conformance_report.txt`. Run with `cargo test --test integration_tests
       conformance_report -- --nocapture` to see it inline, or just `cat` the file after any
-      `cargo test`. **Current pass rate: 369/402 (91.8%)** -- Phase 2 (node properties/anchors)
+      `cargo test`. **Current pass rate: 374/402 (93.0%)** -- Phase 2 (node properties/anchors)
       held flat at 129/402, since those mostly unlock cases that also need block collections
       (Phase 4) to reach content using them. Phase 3 (block scalars) nudged it to 132/402; block
       scalars themselves weren't reachable from real documents yet either (same Phase 4 dependency),
@@ -765,25 +828,29 @@ range/representation policy lives at the conversion site, not in the value model
       collections are most of real-world YAML, and landing them also finally exercised (and
       surfaced latent bugs in) the block-scalar and comment-handling machinery from earlier phases;
       see Phase 4's own writeup above for the three pre-existing bugs this uncovered
-      (`spaces::line_comments`, `spaces::indent_less_than`, `detect_indentation`). **Phase 5
-      (directives/explicit documents) jumped it to 369/402 (91.8%)**, the second-largest gain --
+      (`spaces::line_comments`, `spaces::indent_less_than`, `detect_indentation`). Phase 5
+      (directives/explicit documents) jumped it to 369/402 (91.8%), the second-largest gain --
       most of the corpus' remaining `ParseErrorOnValidCase` failures were multi-document/directive
       streams that simply couldn't be reached before; landing it also surfaced (and fixed, see
       Phase 5's own writeup) two more pre-existing bugs, a missing `c-forbidden` guard in
       multi-line quoted scalars and a too-permissive `yaml_stream` dispatch arm, both caught because
       this harness flagged a transient `UnexpectedSuccessOnErrorCase` regression before they were
-      fixed. Remaining failures are 21 `ParseErrorOnValidCase` (mostly Phase 6 tag/anchor-name
-      corners: `!!`-tag validation, anchors containing `:`, tab-indented flow, empty flow
-      collections, and one root-level zero-indented block-literal case unrelated to Phase 5), 5
+      fixed. **Phase 6 (tag resolution) brought it to 374/402 (93.0%)**: `ContentMismatch` dropped
+      from 7 to 2 now that `Tag::NonSpecific` surfaces as `"!"` and `%XX`-escaped tag suffixes are
+      percent-decoded (both per Phase 6's own writeup). Remaining failures are 21
+      `ParseErrorOnValidCase` (anchor names containing `:`, tab-indented flow, empty flow
+      collections, verbatim/shorthand tag corners, and one root-level zero-indented block-literal
+      case -- all unimplemented-grammar or edge-case gaps, not tag-resolution bugs), 5
       `StructuralMismatch` (flow-mapping edge cases with entirely-empty flow content, e.g.
-      `{}`-shaped nodes), and 7 `ContentMismatch` (4 are the harness not yet surfacing
-      `Tag::NonSpecific` as tag text `"!"`, or a `%XX`-escaped tag suffix not being unescaped for
-      comparison -- both Phase 6 harness/tag-resolution concerns; 2 are double-quoted-scalar
-      trailing-whitespace edge cases pre-dating this phase; 1 is a trailing-blank-lines-in-a-stream
-      edge case). `ParserPanic` and `UnexpectedSuccessOnErrorCase` are both 0. Update this number
-      whenever a phase lands. The real bugs this harness surfaced are now tracked as Phase 0 (and
-      Phase 4, Phase 5) above.
-- [ ] Once Phases 1-6 land, revisit `benches/benchmark.rs`'s commented-out plain-scalar lines.
+      `{}`-shaped nodes), and 2 `ContentMismatch` (both pre-existing double-quoted-scalar
+      trailing-whitespace edge cases, predating Phase 5). `ParserPanic` and
+      `UnexpectedSuccessOnErrorCase` are both 0. Update this number whenever a phase lands. The
+      real bugs this harness surfaced are now tracked as Phase 0 (and Phase 4, Phase 5) above.
+- [x] `benches/benchmark.rs`'s plain-scalar lines were commented out pending Phase 1; Phase 1
+      landed those YAML sessions ago but the benchmark was never revisited until now. Uncommented
+      (`12345, ` / `abcde, ` alongside the existing single/double-quoted entries) and confirmed via
+      `cargo bench --bench benchmark -- --test` (a single untimed smoke run, not the full
+      statistical suite) that the updated input still parses successfully.
 
 ### Phase 8 -- Polish (do last, or opportunistically)
 
