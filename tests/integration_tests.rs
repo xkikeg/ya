@@ -7,14 +7,19 @@
 //! against the tree `ya` itself produces for `in.yaml`.
 //!
 //! The comparison is deliberately scoped to the *representation* (node kind, nesting, scalar
-//! content, resolved tag), not *presentation* (flow vs. block style, or anchor names):
-//! `value::Node` doesn't carry that information today (its stated purpose is eventual
+//! content, an *explicitly*-written tag), not *presentation* (flow vs. block style, or anchor
+//! names): `value::Node` doesn't carry that information today (its stated purpose is eventual
 //! serde/Construct-phase deserialization, not YAML round-tripping). Alias resolution is instead
 //! handled entirely on the oracle side: while
 //! parsing `test.event`, `=ALI` events are expanded against a locally built anchor→subtree map,
 //! mirroring `ya`'s own eager alias substitution in `src/parse/alias.rs`. So both sides end up as
 //! alias-free trees, and comparison stays meaningful for anchor/alias cases even though `ya`
 //! doesn't retain anchor names on its own [`ya::value::Node`] yet.
+//!
+//! `ya`'s own stream is passed through [`ya::resolve::resolve`] before comparison (Core Schema
+//! tag resolution, AGENT.md Phase 6), but the *fully-resolved* tag of an *implicitly*-tagged node
+//! is, like presentation and anchor names, deliberately not compared -- see `tags_match`'s doc
+//! comment for why. Only explicitly-written tags are checked exactly.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,6 +30,7 @@ use std::path::{Path, PathBuf};
 use rstest::rstest;
 use winnow::{error::ContextError, Parser};
 use ya::parse::yaml_stream;
+use ya::resolve::resolve;
 use ya::value;
 
 #[rstest]
@@ -240,6 +246,15 @@ fn check_input(case: &Path, event: &Path) -> Result<(), CaseFailure> {
             })
         }
     };
+    // Resolving is a sanity check on `ya`'s own tag machinery (percent-decoding, explicit
+    // `!!int`/`!!map`/... validation) as much as it is preparation for the comparison below: a
+    // valid corpus case should never fail Core Schema resolution, so a `ResolveError` here is a
+    // real `ya` bug. See `diff_nodes`'s tag-comparison note for why resolving doesn't make every
+    // implicitly-tagged node suddenly need to match an explicit tag in `test.event`.
+    let stream = resolve(stream).map_err(|err| CaseFailure {
+        category: FailureCategory::ContentMismatch,
+        message: format!("tag resolution error: {err}"),
+    })?;
 
     let event_text = read_fixture(event)?;
     let expected = parse_oracle_stream(&event_text).map_err(|message| CaseFailure {
@@ -314,6 +329,25 @@ enum MismatchKind {
     Content,
 }
 
+/// Whether `expected`'s tag (from `test.event`) and `actual`'s tag (`ya`'s own, post-`resolve()`)
+/// should be considered a match.
+///
+/// `expected == None` always matches, regardless of `actual`. `test.event` only ever records a
+/// tag when the source *explicitly wrote one* -- it stays at the representation level, so an
+/// implicitly-tagged (untagged) node never gets a `<tag>` token, even though `ya`'s `resolve()`
+/// (a Construct-phase operation, see `crate::resolve`'s module docs) always assigns *every* node
+/// a concrete `Tag::Standard` kind. Comparing those two 1:1 would fail almost the entire corpus
+/// (every untagged plain scalar, mapping, and sequence) for a dimension this harness doesn't
+/// actually have ground truth for. So, deliberately out of scope, same as presentation style and
+/// anchor names (see the module docs): the *fully-resolved* tag of an *implicitly*-tagged node.
+/// What *is* verified: every explicitly-written tag (`expected == Some(_)`) is checked exactly.
+fn tags_match(expected: &Option<String>, actual: &Option<String>) -> bool {
+    match expected {
+        None => true,
+        Some(_) => expected == actual,
+    }
+}
+
 /// Returns the first point of divergence between `expected` and `actual`, if any, with a
 /// breadcrumb `path` for a readable failure message.
 fn diff_nodes(
@@ -331,7 +365,7 @@ fn diff_nodes(
                     MismatchKind::Content,
                     format!("{path}: scalar value mismatch: expected {ev:?}, got {av:?}"),
                 ))
-            } else if et != at {
+            } else if !tags_match(et, at) {
                 Some((
                     MismatchKind::Content,
                     format!("{path}: scalar tag mismatch: expected {et:?}, got {at:?}"),
@@ -341,7 +375,7 @@ fn diff_nodes(
             }
         }
         (ExpectedNode::Seq { tag: et, items: ei }, ExpectedNode::Seq { tag: at, items: ai }) => {
-            if et != at {
+            if !tags_match(et, at) {
                 return Some((
                     MismatchKind::Content,
                     format!("{path}: sequence tag mismatch: expected {et:?}, got {at:?}"),
@@ -372,7 +406,7 @@ fn diff_nodes(
                 entries: ae,
             },
         ) => {
-            if et != at {
+            if !tags_match(et, at) {
                 return Some((
                     MismatchKind::Content,
                     format!("{path}: mapping tag mismatch: expected {et:?}, got {at:?}"),
@@ -435,11 +469,15 @@ fn node_to_expected(node: &value::Node<'_>) -> ExpectedNode {
 
 fn tag_uri(tag: &value::Tag<'_>) -> Option<String> {
     match tag {
+        // Unreachable in practice once `resolve()` has run (see `check_input`): every node ends
+        // up `Standard`, `NonSpecific`, or a custom `Global`. Kept as `None` defensively rather
+        // than `unreachable!()`, so a real resolve() gap surfaces as an ordinary tag mismatch
+        // instead of a harness panic.
         value::Tag::Unspecified => None,
-        // Resolving `!` to `tag:yaml.org,2002:{str,map,seq}` by node kind is AGENT.md Phase 6
-        // (Core Schema) work; until then, treat it like `Unspecified` so cases exercising it
-        // report as a content mismatch rather than failing to compile.
-        value::Tag::NonSpecific => None,
+        // `test.event` records an explicitly-written `!` as the literal tag "!" (corpus cases
+        // 52DL/8MK2, "Explicit Non-Specific Tag") -- `resolve()` deliberately leaves
+        // `Tag::NonSpecific` unresolved for exactly this reason, see its module docs.
+        value::Tag::NonSpecific => Some("!".to_string()),
         value::Tag::Global(s) => Some(s.to_string()),
         value::Tag::Standard(t) => Some(standard_tag_uri(*t).to_string()),
     }
