@@ -29,6 +29,12 @@ impl<'i> TagHandles<'i> {
     pub fn put(&mut self, handle: Cow<'i, str>, prefix: Cow<'i, str>) {
         self.0.insert(handle, prefix);
     }
+
+    /// Resets to just the two default handles, e.g. at a document boundary: `%TAG` directives are
+    /// document-scoped, so a named handle registered in one document must not leak into the next.
+    pub fn clear(&mut self) {
+        *self = Self::new();
+    }
 }
 
 impl<'i> Default for TagHandles<'i> {

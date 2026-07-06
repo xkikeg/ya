@@ -5,6 +5,7 @@ pub mod anchor;
 pub mod block;
 pub mod chars;
 pub mod context;
+mod directive;
 mod document;
 mod double;
 pub mod error;

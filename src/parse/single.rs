@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{opt, trace},
+    combinator::{not, opt, trace},
     token::{literal, take_while},
     Parser,
 };
@@ -9,6 +9,7 @@ use winnow::{
 use super::{
     chars,
     context::FlowOrKey,
+    document,
     error::ParserError,
     input::InputStream,
     spaces::{self, IndentLevel},
@@ -49,10 +50,18 @@ where
         move |input: &mut Input| {
             let mut current = non_break_single_one_line.parse_next(input)?;
             loop {
-                let may_break = opt(spaces::flow_folded(indent_level)).parse_next(input)?;
+                // A multi-line single-quoted scalar must not swallow a `---`/`...` document
+                // marker line either; see the matching comment in `double::non_break_double_multi_line`
+                // for why this check lives at the fold site rather than at `l-bare-document`
+                // where the spec formally scopes it.
+                let may_break = opt((
+                    spaces::flow_folded(indent_level),
+                    not(document::forbidden).void(),
+                ))
+                .parse_next(input)?;
                 let line_break = match may_break {
                     None => return Ok(current),
-                    Some(b) => b,
+                    Some((b, ())) => b,
                 };
                 // trim the last s-white in the current.
                 // Since single-quoted text doesn't have escape,
