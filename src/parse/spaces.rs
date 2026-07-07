@@ -44,6 +44,19 @@ impl IndentLevel {
         self.0.saturating_sub(1)
     }
 
+    /// Returns whether `spaces` is indented *more* than this level (spec: `spaces > n`).
+    ///
+    /// Unlike comparing `spaces` against [`Self::get`], this correctly distinguishes the
+    /// root sentinel ([`Self::initial`], spec `n = -1`) from an explicit `n = 0`: `get`'s
+    /// `saturating_sub` collapses both to `0`, so `spaces <= self.get()` wrongly treats
+    /// zero-indented content at the document root as "not indented enough" (spec `n = -1` means
+    /// *any* width, including zero, is more indented than `n`). Comparing against the
+    /// unsaturated internal `n + 1` representation instead avoids that collapse.
+    #[inline]
+    pub const fn is_more_indented_than(&self, spaces: IndentLevelType) -> bool {
+        spaces >= self.0
+    }
+
     /// Returns 1 smaller level.
     #[inline]
     pub const fn prev(&self) -> Self {
