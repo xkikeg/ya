@@ -50,10 +50,9 @@ where
         move |input: &mut Input| {
             let mut current = non_break_single_one_line.parse_next(input)?;
             loop {
-                // A multi-line single-quoted scalar must not swallow a `---`/`...` document
-                // marker line either; see the matching comment in `double::non_break_double_multi_line`
-                // for why this check lives at the fold site rather than at `l-bare-document`
-                // where the spec formally scopes it.
+                // See `document::bare_document`'s doc comment for why `c-forbidden` is checked
+                // at the fold site rather than once at `l-bare-document`; same hazard as
+                // `double::non_break_double_multi_line`'s multi-line fold.
                 let may_break = opt((
                     spaces::flow_folded(indent_level),
                     not(document::forbidden).void(),

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{alt, opt, preceded, repeat, separated_foldl1, trace},
+    combinator::{alt, not, opt, preceded, repeat, separated_foldl1, trace},
     token::{one_of, take_while},
     Parser,
 };
@@ -10,6 +10,7 @@ use super::header::{self, ChompingMode};
 use crate::parse::{
     chars,
     context::BlockIn,
+    document,
     error::ParserError,
     input::InputStream,
     spaces::{self, IndentLevel},
@@ -52,6 +53,13 @@ where
 /// distinguishes a foldable line from a "more-indented" ([`spaced_text`]) one, which starts with
 /// extra white space instead and is therefore kept literal rather than folded.
 ///
+/// At `indent_level = 0` (only reachable at the document root, spec `n = -1`), `s-indent(0)`
+/// matches trivially without consuming anything, and `---`/`...` markers start with non-space
+/// characters, so without the [`document::forbidden`] guard this would swallow a marker line as
+/// ordinary content. See `document::bare_document`'s doc comment for why `c-forbidden` is
+/// checked here rather than once at `l-bare-document`; `spaced_text` doesn't need the same
+/// guard since a marker line never starts with whitespace, so it's naturally excluded already.
+///
 /// https://yaml.org/spec/1.2.2/#rule-s-nb-folded-text
 #[doc(alias = "s-nb-folded-text")]
 fn folded_text<'i, Input, Error>(indent_level: IndentLevel) -> impl Parser<Input, &'i str, Error>
@@ -62,7 +70,7 @@ where
     trace(
         "block::folded::folded_text",
         preceded(
-            spaces::indent(indent_level),
+            (spaces::indent(indent_level), not(document::forbidden)),
             (
                 one_of(chars::is_non_space),
                 take_while(0.., chars::is_non_break),

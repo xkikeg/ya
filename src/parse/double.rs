@@ -75,13 +75,11 @@ where
         move |input: &mut Input| {
             let (mut current, mut literal_tail_len) = non_break_double_chars.parse_next(input)?;
             loop {
-                // A multi-line double-quoted scalar must not swallow a `---`/`...` document
-                // marker line either, same as a multi-line plain scalar (see the comment on
-                // `plain::plain` for why this check lives at the fold site rather than at
-                // `l-bare-document` where the spec formally scopes it). Folding onto such a line
-                // makes the whole alternative fail, so `opt` below gracefully treats it as "no
-                // further continuation" and leaves the marker line for the closing quote to (not)
-                // find, correctly failing the scalar as unterminated.
+                // See `document::bare_document`'s doc comment for why `c-forbidden` is checked
+                // at each fold alternative here rather than once at `l-bare-document`. Folding
+                // onto such a line makes the whole alternative fail, so `opt` below gracefully
+                // treats it as "no further continuation" and leaves the marker line for the
+                // closing quote to (not) find, correctly failing the scalar as unterminated.
                 let may_break = opt(alt((
                     (
                         double_escaped_line_break(indent_level),

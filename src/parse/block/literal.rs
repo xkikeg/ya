@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{opt, preceded, repeat, trace},
+    combinator::{not, opt, preceded, repeat, trace},
     token::take_while,
     Parser,
 };
@@ -10,6 +10,7 @@ use super::header::{self, ChompingMode};
 use crate::parse::{
     chars,
     context::BlockIn,
+    document,
     error::ParserError,
     input::InputStream,
     spaces::{self, IndentLevel},
@@ -50,6 +51,12 @@ where
 /// A single literal-style content line: any leading empty lines, followed by one indented,
 /// non-empty line of raw (unescaped) content.
 ///
+/// At `indent_level = 0` (only reachable at the document root, spec `n = -1`), `s-indent(0)`
+/// matches trivially without consuming anything, so without the [`document::forbidden`] guard
+/// this would happily swallow a `---`/`...` marker line as if it were ordinary content. See
+/// `document::bare_document`'s doc comment for why `c-forbidden` is checked here rather than
+/// once at `l-bare-document`.
+///
 /// https://yaml.org/spec/1.2.2/#rule-l-nb-literal-text
 #[doc(alias = "l-nb-literal-text")]
 fn literal_text<'i, Input, Error>(
@@ -63,7 +70,7 @@ where
         let count: usize =
             repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
         let text: &str = preceded(
-            spaces::indent(indent_level),
+            (spaces::indent(indent_level), not(document::forbidden)),
             take_while(1.., chars::is_non_break),
         )
         .parse_next(input)?;
