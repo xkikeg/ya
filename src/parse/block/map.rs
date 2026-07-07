@@ -1,11 +1,13 @@
 use winnow::{
-    combinator::{alt, peek, preceded, repeat, terminated, trace},
+    combinator::{alt, not, peek, preceded, repeat, terminated, trace},
+    token::one_of,
     Parser,
 };
 
 use crate::{
     parse::{
         block::node::{self, block_indented},
+        chars,
         context::{BlockKey, BlockOut},
         error::ParserError,
         input::InputStream,
@@ -79,7 +81,10 @@ where
     )
 }
 
-/// Explicit block mapping key: `?` followed by an indented node.
+/// Explicit block mapping key: `?` (not followed by a non-whitespace char, matching the spec's
+/// own annotation on `c-mapping-key` here -- otherwise it's a plain scalar starting with `?`,
+/// e.g. `?foo`, not an explicit-key marker; the same lookahead hazard Phase 0 already fixed for
+/// `c-l-block-seq-entry`'s `-`) followed by an indented node.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-l-block-map-explicit-key
 #[doc(alias = "c-l-block-map-explicit-key")]
@@ -92,7 +97,10 @@ where
 {
     trace(
         "block::map::block_map_explicit_key",
-        preceded('?', block_indented(BlockOut, indent_level)),
+        preceded(
+            ('?', not(one_of(chars::is_non_space))),
+            block_indented(BlockOut, indent_level),
+        ),
     )
 }
 

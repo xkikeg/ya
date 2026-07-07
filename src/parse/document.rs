@@ -728,4 +728,46 @@ mod tests {
             testing::parse(yaml_stream, input).unwrap()
         );
     }
+
+    /// Corpus case `2EBW` ("Allowed characters in keys"): `?foo` (no space after `?`) is a plain
+    /// scalar key, not an explicit-key marker -- `c-l-block-map-explicit-key`'s `?` is only the
+    /// marker when *not* followed by a non-whitespace char (per the spec's own annotation on
+    /// `c-mapping-key` at that rule), the same lookahead hazard Phase 0 already fixed for
+    /// `c-l-block-seq-entry`'s `-`. Before that fix, `?foo: safe question mark` was misparsed as
+    /// an explicit entry whose *key* was itself a nested one-entry mapping (`{foo: "safe question
+    /// mark"}`), swallowing the whole line instead of treating `?foo` as one plain scalar.
+    #[test]
+    fn allowed_characters_in_keys_corpus_2ebw() {
+        let input = "a!\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~: safe\n?foo: safe question mark\n:foo: safe colon\n-foo: safe dash\nthis is#not: a comment\n";
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::unspecified(Content::Map(
+                    value::Mapping(vec![
+                        value::MapEntry {
+                            key: plain("a!\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~"),
+                            value: plain("safe"),
+                        },
+                        value::MapEntry {
+                            key: plain("?foo"),
+                            value: plain("safe question mark"),
+                        },
+                        value::MapEntry {
+                            key: plain(":foo"),
+                            value: plain("safe colon"),
+                        },
+                        value::MapEntry {
+                            key: plain("-foo"),
+                            value: plain("safe dash"),
+                        },
+                        value::MapEntry {
+                            key: plain("this is#not"),
+                            value: plain("a comment"),
+                        },
+                    ])
+                )))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
 }
