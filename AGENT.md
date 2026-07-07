@@ -1059,11 +1059,30 @@ now runs unskipped.
       (`.with_taken()` + char counting) for the 1024-char implicit-key limit, so there was nothing
       pulling `WithLimit` into real use.
 - [ ] Switch `spaces.rs::separate_lines`'s `alt` to `dispatch!` per its own TODO, for parity with
-      `document.rs::yaml_stream`'s use of `dispatch!`.
-- [ ] Public API ergonomics once the grammar is more complete: a top-level `ya::parse(&str) ->
-      Result<value::Stream, _>` convenience function composing `yaml_stream` + `resolve()` (today
-      callers must reach into `parse::yaml_stream` + `parse::input::Input` + pick a winnow `Error`
-      type themselves, as seen in `tests/integration_tests.rs`).
+      `document.rs::yaml_stream`'s use of `dispatch!`. **Deliberately deferred, tracked as its own
+      follow-up issue rather than bundled into this phase's PR**: it's a pure perf/style parity
+      nit (the existing `alt` is already correct), not a functional gap, and reworking it carries
+      its own small risk of a subtle regression for zero behavior change -- not worth blocking the
+      rest of Phase 8 on.
+- [x] **Public API ergonomics**: top-level `ya::parse(&str) -> Result<value::Stream<'_>,
+      Error<'_>>` (`src/lib.rs`), composing `parse::yaml_stream::<_, ContextError>` +
+      `resolve::resolve` -- the two steps every caller needs -- so callers no longer have to reach
+      into `parse::yaml_stream` + `parse::input::Input` + pick a winnow `Error` type themselves
+      (`tests/integration_tests.rs` still does that directly, since it needs to distinguish parse
+      failures from resolve failures for its own conformance-category bookkeeping, so it was left
+      as-is rather than migrated). `Error<'i>` wraps either a boxed
+      `winnow::error::ParseError<parse::input::Input<'i>, ContextError>` (boxed per
+      `clippy::result_large_err`: `Input` carries the whole anchor-store/tag-handles parse state,
+      making the unboxed variant far larger than `resolve::ResolveError`) or a
+      `resolve::ResolveError`, with `Display`/`std::error::Error` impls. Required one small
+      supporting fix: `parse::input::Input` didn't implement winnow's `AsBStr` (needed for
+      `ParseError`'s own `Display` impl bound), even though its inner
+      `Stateful<LocatingSlice<&str>, _>` already does -- added a one-line forwarding impl in
+      `input.rs`, the same forwarding pattern already used there for `Stream`/`Compare`/
+      `StreamIsPartial`. Tests: `lib.rs`'s own `#[cfg(test)] mod tests` (a mapping round-trip
+      through the typed accessors, a syntax-error case, a resolve-error case via `!!int foo`) plus
+      a crate-level doctest on `parse` itself. `cargo test`, `cargo test --doc`, and
+      `cargo clippy --all-targets --all-features -- -D warnings` all clean.
 - [ ] Consider `serde` integration (feature-gated) once the value model round-trips real documents.
 
 ### Open design questions (escalate to the maintainer)
