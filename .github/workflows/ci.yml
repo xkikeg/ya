@@ -13,13 +13,23 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: default
+            flag: ""
+          - name: all-features
+            flag: "--all-features"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo test --all-features
+        with:
+          key: ${{ matrix.features.name }}
+      - run: cargo test ${{ matrix.features.flag }}
 
   cargo-deny:
     runs-on: ubuntu-latest

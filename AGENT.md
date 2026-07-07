@@ -1083,7 +1083,51 @@ now runs unskipped.
       through the typed accessors, a syntax-error case, a resolve-error case via `!!int foo`) plus
       a crate-level doctest on `parse` itself. `cargo test`, `cargo test --doc`, and
       `cargo clippy --all-targets --all-features -- -D warnings` all clean.
-- [ ] Consider `serde` integration (feature-gated) once the value model round-trips real documents.
+- [x] **`serde` integration**, feature-gated behind an optional `serde` Cargo feature (`serde =
+      { version = "1.0", optional = true }` + `[features] serde = ["dep:serde"]`) so it costs
+      nothing for callers who don't opt in. Only `Deserialize` is implemented, not `Serialize` --
+      see `src/de.rs`'s module docs for why the tag-only resolution model (Phase 6) makes the
+      former a natural fit and the latter a separate, presentation-layer concern this crate
+      doesn't model at all. `de::NodeDeserializer<'de>` implements `serde::Deserializer<'de>`
+      directly over an owned `value::Node<'de>` (consuming rather than borrowing it, so a
+      `Cow::Borrowed` scalar reaches the visitor zero-copy via `visit_borrowed_str` -- the same
+      `Cow`-borrowing discipline the parser itself follows). `de::from_str::<T>(&str) ->
+      Result<T, Error<'_>>` is the top-level entry point (re-exported as `ya::from_str`),
+      composing `crate::parse` with it; an empty stream (zero documents) deserializes as an
+      implicit null, matching the Core Schema's own empty-document handling, and a stream with
+      more than one document is rejected (deserialize `Stream::documents()` individually for that
+      case). `deserialize_any` dispatches on `(tag, content)`: `Content::Empty`/seq/map are
+      tag-independent; a scalar's `Tag::Standard(Null/Bool/Int/Float)` gets a native
+      `visit_unit`/`visit_bool`/`visit_i64`-or-`visit_u64`/`visit_f64` (a new
+      `value::parse_core_uint` complements the existing `parse_core_int`/`parse_core_float`, for
+      positive integer lexemes that overflow `i64` but fit `u64` -- all three were widened from
+      private to `pub(crate)` for `de.rs` to reuse rather than duplicating the Core Schema lexeme
+      grammar a second time); anything else (`Str`, `NonSpecific`, a custom `Global` tag, or any
+      unresolved/mismatched combination reachable only by hand-building a `Node` outside
+      `resolve()`) falls back to the raw scalar text. `deserialize_option` treats `Content::Empty`
+      or an explicit `Standard(Null)` tag as `None`; everything else forwards to `deserialize_any`
+      via `serde::forward_to_deserialize_any!` (confirmed against serde's own macro docs that this
+      is the standard, recommended pattern for self-describing formats, including for
+      `newtype_struct` -- forwarding it to `deserialize_any` rather than calling
+      `visitor.visit_newtype_struct(self)` is *not* a shortcut/gap, it's what serde_json/serde_yaml
+      themselves do). `deserialize_enum` supports both YAML's natural enum shapes: a bare scalar
+      names a unit variant directly, and a single-entry mapping `{Variant: value}` is externally
+      tagged (unit/newtype/tuple/struct variants all handled via a small `EnumAccess`/
+      `VariantAccess` pair). Errors from mismatched types or custom `Deserialize` validation
+      surface as a new `Error::Custom(String)` variant on the existing `ya::Error` from the
+      top-level-API item above, itself `#[cfg(feature = "serde")]`-gated (so `ya::Error` costs
+      nothing extra without the feature) and constructed only via
+      `impl serde::de::Error for Error<'_> { fn custom(...) }`. Required one more supporting
+      addition beyond `value.rs`'s new `parse_core_uint`: none otherwise -- `Node`/`Content`/
+      `Mapping`/`MapEntry`'s existing field/accessor visibility was already sufficient for `de.rs`
+      (a sibling module in the same crate) to pattern-match directly. Tests: `de.rs`'s own
+      `#[cfg(test)] mod tests` (struct/primitive/borrowed-`&str`-zero-copy/option/empty-stream/
+      sequence/map/enum-variant-shapes/multiple-documents-rejected/type-mismatch cases, using
+      `#[derive(serde::Deserialize)]` test types) plus a crate-level doctest on `from_str` itself.
+      `cargo test --all-features`, `cargo test --doc` (2 doctests), and
+      `cargo clippy --all-targets --all-features -- -D warnings` all clean; `cargo build`/
+      `cargo clippy --all-targets` (no features) confirmed unaffected, so the feature genuinely
+      costs nothing when not enabled.
 
 ### Open design questions (escalate to the maintainer)
 
