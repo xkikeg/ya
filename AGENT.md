@@ -970,10 +970,22 @@ on its own.
       **`01` "Question mark edge cases"** was already fixed incidentally by an earlier PR in this
       phase (the empty-flow-sequence fix) -- removed from this item since there's nothing left to
       root-cause there.
-- [ ] **`2EBW` "Allowed characters in keys"**: a plain scalar containing most of
-      `!"#$%&'()*+,-./09:;<=>?@AZ[\]^_\`az{|}~` as a block mapping key; one of 5 keys in the
-      fixture doesn't round-trip (`mapping length mismatch: expected 5, got 4`) -- likely a
-      plain-scalar char-class gap for one specific character in that set; needs isolating which.
+- [x] **`2EBW` "Allowed characters in keys"**. Root cause was not a plain-scalar char-class gap
+      as originally guessed, but the *same class* of bug as the block-collection and block-map
+      key/value fixes elsewhere in this phase: `block::map::block_map_explicit_key`'s `'?'` had
+      no lookahead guard, so `?foo` (no space after `?`, meant to be one plain scalar key) was
+      misparsed as an explicit-key entry marker whose "key" was a nested one-entry mapping
+      (`{foo: "safe question mark"}`), swallowing the whole line. The actual spec text (checked
+      directly, since the compact grammar notation carries the restriction as an inline comment
+      easy to miss): `c-l-block-map-explicit-key(n) ::= c-mapping-key s-l+block-indented(...)`
+      where `c-mapping-key` is annotated `# '?' (not followed by non-ws char)` -- exactly the
+      lookahead hazard Phase 0 already fixed for `c-l-block-seq-entry`'s `-`, just never applied
+      to the map-explicit-key case. Fixed with the same `not(one_of(chars::is_non_space))` guard.
+      (The spec text shows the identical annotation on `l-block-map-explicit-value`'s and
+      `c-l-block-map-implicit-value`'s `':'` too, but neither has a known-failing corpus case
+      exercising it, so neither was touched here -- flag if a future case needs it.) Regression
+      test: `document.rs::allowed_characters_in_keys_corpus_2ebw`.
+      Conformance: 398/402 (99.0%) -> **399/402 (99.3%)**.
 - [ ] **`ContentMismatch` x2, pre-existing since before Phase 5** (`01` "Trailing line of spaces",
       `02` "Trailing whitespace in streams"): both about a block/folded or block/literal scalar's
       final chomped-empty trailing blank line losing one line of whitespace
