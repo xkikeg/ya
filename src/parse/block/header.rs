@@ -169,7 +169,7 @@ where
                     max_empty_spaces = max_empty_spaces.max(spaces);
                     continue;
                 }
-                if spaces <= indent_level.get() {
+                if indent_level >= IndentLevel::new(spaces) {
                     break;
                 }
                 detected = Some(spaces);
@@ -396,12 +396,34 @@ mod tests {
     fn detect_indentation_stops_at_sibling_content_not_indented_further() {
         // A block scalar with no content of its own (e.g. `strip: >-` immediately followed by a
         // sibling `clip: >` at column 0, as in yaml-test-suite case K858) must not mistake that
-        // sibling line for its own content: `n=0` (BlockOut root) and the candidate line has 0
-        // leading spaces, i.e. not *more* indented than `n`.
+        // sibling line for its own content: `n=0` (the enclosing mapping's own indent, since the
+        // scalar is a mapping *value*, not the document root itself -- see
+        // `detect_indentation_detects_zero_indented_content_at_document_root` for why the
+        // document-root sentinel `n=-1` is a genuinely different case) and the candidate line has
+        // 0 leading spaces, i.e. not *more* indented than `n`.
         let (rest, detected) =
-            testing::parse(detect_indentation(IndentLevel::initial()), "sibling: x\n").unwrap();
+            testing::parse(detect_indentation(IndentLevel::new(0)), "sibling: x\n").unwrap();
         assert_eq!("sibling: x\n", rest);
         assert_eq!(None, detected.content);
         assert_eq!(IndentLevel::new(0), detected.bound);
+    }
+
+    /// Spec examples `FP8R`/`DK3J` ("Zero indented block scalar"): a block scalar that's the
+    /// *entire document* (`--- >` at the document root, spec `n = -1`) can have its content at
+    /// column 0 -- any width, including zero, is "more indented" than `-1`. `IndentLevel::get`'s
+    /// `saturating_sub` collapses `initial()` (`n=-1`) and `new(0)` (`n=0`) to the same `0`, which
+    /// used to make a naive `spaces <= indent_level.get()` comparison wrongly treat zero-indented
+    /// root content as *not* indented enough (see the previous test for the `n=0` case where that
+    /// same threshold is, correctly, the right one). Comparing `IndentLevel::new(spaces)` against
+    /// `indent_level` directly (via `IndentLevel`'s derived `Ord`) avoids the collapse instead:
+    /// both sides go through the same `n -> n+1` encoding before comparing, so the comparison
+    /// stays symmetric and never loses the `-1` case the way comparing against the lossily
+    /// decoded `get()` does.
+    #[test]
+    fn detect_indentation_detects_zero_indented_content_at_document_root() {
+        let (rest, detected) =
+            testing::parse(detect_indentation(IndentLevel::initial()), "line1\nline2\n").unwrap();
+        assert_eq!("line1\nline2\n", rest);
+        assert_eq!(Some(IndentLevel::new(0)), detected.content);
     }
 }

@@ -930,13 +930,37 @@ on its own.
       the empty-flow-sequence bug (just fixed above), and `26DV` (anchors/aliases directly on
       block-mapping keys, e.g. `*alias1 : scalar3`) was an instance of the block-collection
       leading-properties backtracking bug (fixed earlier this phase). Nothing left to do here.
-- [ ] **Zero-indented block scalar at the document root** (`DK3J`, `FP8R`, both `--- >` with
-      content starting at column 0): flagged back in Phase 3's `detect_indentation` writeup as a
-      known scope limitation (the detection scan wasn't bounded/tested at the document-root
-      sentinel indentation). Root cause understood in outline already; needs the actual fix.
-- [ ] **Bare/directives document edge cases** (`M7A3` spec 9.3, `W4TN` spec 9.5, both involve a
-      document whose content is a block literal `|` directly after `---`, plus multi-document
-      `...`-separated streams) and **`01` "Question mark edge cases"** -- not yet root-caused.
+- [x] **Zero-indented block scalar at the document root** (`DK3J`, `FP8R`, both `--- >` with
+      content starting at column 0, plus `M7A3` which turned out to be the same bug). Root cause:
+      `block::header::detect_indentation`'s scan compared candidate indentation via
+      `spaces <= indent_level.get()`, and `IndentLevel::get`'s `saturating_sub` collapses the
+      document-root sentinel (`IndentLevel::initial()`, spec `n = -1`) and an explicit `n = 0` to
+      the same `0` -- so zero-indented content was always rejected as "not indented enough", even
+      at the root, where spec `n = -1` means *any* width (including zero) legitimately counts.
+      Fixed not by adding a new comparison method, but by converting `spaces` into an
+      `IndentLevel` first (`IndentLevel::new(spaces)`) and comparing it against `indent_level`
+      directly via `IndentLevel`'s already-derived `Ord` (`indent_level >= IndentLevel::new(spaces)`).
+      Both sides go through the same `n -> n+1` encoding before comparing this way, so the
+      comparison stays symmetric and never loses the `-1` case the way comparing against the
+      lossily-decoded `get()` does -- no new API surface needed, since `new(v)` already means "the
+      `IndentLevel` representing spec `n = v`," which is exactly what a candidate's literal space
+      count represents too (the same conversion `detect_indentation` already does elsewhere for its
+      own return value). This also uncovered a **pre-existing, unrelated test bug**:
+      `detect_indentation_stops_at_sibling_content_not_indented_further`'s own comment said
+      `n=0`, but it passed `IndentLevel::initial()` (`n=-1`) -- harmless before this fix (both
+      collapsed to the same threshold), but wrong afterward (fixed to pass `IndentLevel::new(0)`,
+      matching what the comment always claimed). New regression test:
+      `detect_indentation_detects_zero_indented_content_at_document_root`.
+      Conformance: 394/402 (98.0%) -> **397/402 (98.8%)**, fixing `DK3J`, `FP8R`, and `M7A3` (a
+      document consisting entirely of a zero-indented block literal, previously miscategorized
+      as a "bare/directives document" issue below -- it was this same bug).
+- [ ] **`W4TN`** (spec 9.5 "Directives Documents"): improved by the fix above (was a parse error,
+      now `StructuralMismatch: document count mismatch: expected 2, got 1`) but not fully fixed --
+      a `%YAML`-directived document followed by `...` and a second, empty (`# Empty` comment-only)
+      document isn't producing two documents. Not yet root-caused past this point.
+      **`01` "Question mark edge cases"** was already fixed incidentally by an earlier PR in this
+      phase (the empty-flow-sequence fix) -- removed from this item since there's nothing left to
+      root-cause there.
 - [ ] **`2EBW` "Allowed characters in keys"**: a plain scalar containing most of
       `!"#$%&'()*+,-./09:;<=>?@AZ[\]^_\`az{|}~` as a block mapping key; one of 5 keys in the
       fixture doesn't round-trip (`mapping length mismatch: expected 5, got 4`) -- likely a
