@@ -52,9 +52,13 @@ where
     trace(
         "flow::pair::flow_pair_entry",
         alt((
+            // JSON-key first -- see the matching comment on
+            // `flow::map::flow_map_implicit_entry` for why: a collection-shaped key preceded by
+            // an anchor/tag (e.g. `&a [x]: y`) would otherwise be silently mis-parsed by the
+            // YAML-key arm as just the anchor, with the collection left unconsumed.
+            flow_pair_json_key_entry(context, indent_level),
             flow_pair_yaml_key_entry(context, indent_level),
             flow::map::flow_map_empty_key_entry(context, indent_level),
-            flow_pair_json_key_entry(context, indent_level),
         )),
     )
 }
