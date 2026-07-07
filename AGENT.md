@@ -854,12 +854,23 @@ category.
 
 ### Phase 8 -- Polish (do last, or opportunistically)
 
-- [ ] Clear the existing `cargo build` warnings (unused imports/params in `scalar.rs`, `plain.rs`,
-      `block/map.rs`, `block/node.rs`) -- explicitly deferred until the phases above make real use of
-      those parameters/types.
-- [ ] `input.rs::WithLimit` is dead code: `key.rs` implements the 1024-char cap via
-      `.with_taken()` + char counting instead. Pick one: switch `key.rs` to `WithLimit`, or delete
-      `WithLimit`.
+- [x] Clear the existing `cargo build` warnings. By the time this was picked up, `plain.rs` and
+      `block/map.rs`/`block/node.rs` no longer had any (their parameters had come into real use in
+      earlier phases); the one remaining offender was `scalar.rs`, left over from `double_quoted`
+      moving into its own `double.rs` module -- stale imports of `trace`, `crate::value::Scalar`,
+      `context::self` and `double` were removed. Also fixed along the way (surfaced by
+      `cargo clippy --all-targets`, not `cargo build`): `bool_assert_comparison` (8x in
+      `input.rs`'s test module, `assert_eq!(true/false, ...)` -> `assert!`/`assert!(!...)`) and a
+      `while_let_loop` in `block/literal.rs::literal_content`. `cargo clippy --all-targets` is now
+      fully clean. Same pass also found and fixed a couple of `trace()` gaps against this file's own
+      "every parser is wrapped in `trace(...)`" convention: `scalar.rs::single_quoted` and
+      `spaces.rs::separate` had no `trace()` wrapper at all, and `flow/pair.rs`'s four parsers were
+      traced as `"flow::flow_pair*"` instead of `"flow::pair::flow_pair*"` (every other `flow/*.rs`
+      module's trace path includes its own module segment; `pair.rs` alone didn't).
+- [x] `input.rs::WithLimit` is dead code: deleted (along with its ~200 lines of `Stream`/
+      `Compare`/etc. trait impls). `key.rs` already had a working, simpler alternative
+      (`.with_taken()` + char counting) for the 1024-char implicit-key limit, so there was nothing
+      pulling `WithLimit` into real use.
 - [ ] Switch `spaces.rs::separate_lines`'s `alt` to `dispatch!` per its own TODO, for parity with
       `document.rs::yaml_stream`'s use of `dispatch!`.
 - [ ] Public API ergonomics once the grammar is more complete: a top-level `ya::parse(&str) ->

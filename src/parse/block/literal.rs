@@ -116,11 +116,8 @@ where
         move |input: &mut Input| {
             let mut current: Cow<str> = match opt(literal_text(indent_level)).parse_next(input)? {
                 Some(mut text) => {
-                    loop {
-                        match opt(literal_next(indent_level)).parse_next(input)? {
-                            Some(next) => text.to_mut().push_str(&next),
-                            None => break,
-                        }
+                    while let Some(next) = opt(literal_next(indent_level)).parse_next(input)? {
+                        text.to_mut().push_str(&next);
                     }
                     let last = header::chomped_last(chomping).parse_next(input)?;
                     if !last.is_empty() {
