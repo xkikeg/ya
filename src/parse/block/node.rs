@@ -1,5 +1,5 @@
 use winnow::{
-    combinator::{alt, delimited, empty, opt, terminated, trace},
+    combinator::{alt, delimited, empty, terminated, trace},
     token::take_while,
     Parser,
 };
@@ -73,6 +73,15 @@ where
 /// passes through [`block_indented`]'s own cycle-breaking closure. See AGENT.md's note on
 /// breaking recursive-grammar cycles with a hand-rolled closure.
 ///
+/// The leading `( s-separate(n+1,c) c-ns-properties(n+1,c) )?` group is only a valid *collection*
+/// property when it's immediately followed by `s-l-comments` -- i.e. it stands alone on its own
+/// line, with nothing else before the collection's own (indented) entries start. If a node
+/// property is present but *doesn't* stand alone (e.g. `&a a: b`, where `&a` anchors the mapping's
+/// first implicit key, not the mapping itself), `s-l-comments` fails, and the whole
+/// properties-bearing alternative must backtrack rather than hard-fail: the two are tried as
+/// genuine alternatives (`alt`), not as an `opt(...)` group whose success is locked in before its
+/// consequences (the trailing `s-l-comments`) are known.
+///
 /// https://yaml.org/spec/1.2.2/#rule-s-l+block-collection
 #[doc(alias = "s-l+block-collection")]
 fn block_collection<'i, Context, Input, Error>(
@@ -86,13 +95,16 @@ where
 {
     trace("block::node::block_collection", move |input: &mut Input| {
         let start = input.checkpoint();
-        let props = opt((
-            spaces::separate(context, indent_level + 1),
-            properties::properties(context, indent_level + 1),
+        let props = alt((
+            delimited(
+                spaces::separate(context, indent_level + 1),
+                properties::properties(context, indent_level + 1),
+                spaces::line_comments,
+            )
+            .map(Some),
+            spaces::line_comments.value(None),
         ))
-        .parse_next(input)?
-        .map(|((), props)| props);
-        spaces::line_comments.parse_next(input)?;
+        .parse_next(input)?;
         let content = alt((
             seq::block_sequence(Context::seq_space(indent_level)).map(Content::Seq),
             map::block_mapping(indent_level).map(Content::Map),
