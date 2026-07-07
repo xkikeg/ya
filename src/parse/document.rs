@@ -424,6 +424,34 @@ mod tests {
         Node::unspecified(Content::Scalar(value::Scalar::Plain(Cow::Borrowed(s))))
     }
 
+    /// Corpus case `ZH7C` ("Anchors in Mapping"): an anchor directly preceding an implicit block
+    /// mapping key (`&a a: b`) anchors just that *key* node, not the whole mapping -- the
+    /// enclosing `s-l+block-collection`'s own optional leading properties must backtrack when
+    /// they're not followed by `s-l-comments` (i.e. when more of the same line follows), rather
+    /// than hard-failing the whole collection.
+    #[test]
+    fn anchor_on_implicit_block_mapping_key_corpus_zh7c() {
+        let input = "&a a: b\nc: &d d\n";
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::unspecified(Content::Map(
+                    value::Mapping(vec![
+                        value::MapEntry {
+                            key: plain("a"),
+                            value: plain("b"),
+                        },
+                        value::MapEntry {
+                            key: plain("c"),
+                            value: plain("d"),
+                        },
+                    ])
+                )))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
     #[test]
     fn explicit_document_same_line_content() {
         assert_eq!(

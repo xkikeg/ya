@@ -852,6 +852,80 @@ category.
       `cargo bench --bench benchmark -- --test` (a single untimed smoke run, not the full
       statistical suite) that the updated input still parses successfully.
 
+### Phase 7b -- Closing the remaining conformance gap to 100% (started post-Phase-7/8; in progress)
+
+Goal: 402/402, so CI can eventually run the full corpus with no skips. Tackled as independent,
+small PRs (one root cause each) rather than one large change -- each item below is scoped to land
+on its own.
+
+- [x] **Block-collection leading-properties backtracking bug.** `block::node::block_collection`'s
+      `( s-separate(n+1,c) c-ns-properties(n+1,c) )?` group was coded as an `opt(...)` around
+      *just* the separate+properties pair, with the mandatory trailing `s-l-comments` check
+      afterwards, outside the `opt`. Since `opt` commits to its `Some(...)` result the moment
+      separate+properties succeeds, a case like `&a a: b` (an anchor directly on a mapping's
+      first *implicit key*, not on the mapping itself) would have `properties()` happily consume
+      `&a` as if it were the *collection's own* anchor, then fail the immediately-following
+      `s-l-comments` check (since `a: b` -- not a comment/EOL -- follows on the same line), and
+      that failure was unrecoverable: the whole `block_collection` parser hard-failed instead of
+      backtracking to "no collection-level properties here" and letting the mapping's own
+      implicit-key parsing (which *does* handle key-level anchors/tags via `flow_yaml_node`)
+      have a turn. Fixed by restructuring the `opt(...)` into a genuine `alt((with_properties,
+      without_properties))` where each branch bundles separate+properties+line_comments (or just
+      line_comments) as one atomic unit, so a downstream failure inside the properties-bearing
+      branch backtracks the whole branch, not just part of it. Regression test:
+      `document.rs::anchor_on_implicit_block_mapping_key_corpus_zh7c` (transcribing corpus case
+      `ZH7C`). Conformance: 374/402 (93.0%) -> **385/402 (95.8%)**, fixing 11 cases in one change:
+      `2SXE`, `ZH7C`, `7BMT`, `U3XV`, `E76Z`, `PW8X`, `74H7`, `HMQ5`, `7FWL`, `FH7J`, plus partial
+      progress on `9KAX` (8 of its 9 documents now pass; see below for the one that doesn't).
+- [ ] **Flow-map key/value ambiguity when a shorter (wrong) alternative "succeeds" instead of
+      failing.** `X38W` ("Aliases in Flow Objects", `{ &a [a, &b b]: *b, *a : [c, *b, d]}`) and
+      the one remaining `9KAX` document (`!!map\n&a8 !!str key8: value7`, tag on its own line then
+      a separately-anchored+tagged key on the next) both fail for a *different* reason than the
+      bug above, even though the symptom looks similar. Root cause traced (see conversation/PR
+      history around 2026-07-07): `flow::map::flow_map_yaml_key_entry` calls `flow_yaml_node` for
+      the key, and `flow_yaml_node`'s "properties with no content" fallback (`Content::Empty`, a
+      legitimate rule on its own -- see Phase 2's 2d) makes it *succeed* consuming only `&a`
+      when the real key is `&a [a, &b b]` (a flow *sequence*, which only JSON-content, not
+      YAML-content, can parse) -- i.e. it stops too early instead of failing outright, so
+      `alt((yaml_key_entry, empty_key_entry, json_key_entry))` never gets to try
+      `json_key_entry`, and the leftover `[a, &b b]: *b` fails the entries loop's subsequent
+      comma-or-`}` check. This is a harder problem than the block-collection fix: it's an
+      ambiguity between two *both individually-valid-per-their-own-rule* parses (short match now
+      vs. long match later), which `alt`'s ordered-choice-without-retry semantics can't resolve by
+      construction alone -- needs either a restructured entry-level alternative that tries the
+      fuller parse first when a collection-shaped key follows, or a lookahead guard. Escalate if
+      the fix isn't obviously spec-shaped once attempted -- this is exactly the kind of thing
+      AGENT.md's own conventions ask to flag rather than hack around.
+- [ ] **Flow mapping/sequence empty-content edge cases**: `FRK4` (spec 7.3, `{? foo :, : bar,}`),
+      `WZ62` (spec 7.2, `{foo : !!str, !!str : bar,}`), `5C5M` (spec 7.15 flow mappings),
+      `4ABK` (flow mapping separate values with a bare URI-like plain scalar entry), `7ZZ5`
+      (`[]`/`{}` empty flow collections nested in block context). All show as
+      `StructuralMismatch: mapping length mismatch` or a parse error -- likely a shared root cause
+      around completely-empty flow node/entry handling, but not yet root-caused as precisely as
+      the block-collection bug; investigate as its own PR.
+- [ ] **Tab-indented flow** (`6CA3`, `\t[\n\t]`) and **whitespace-around-colon /
+      whitespace-after-scalars in flow** (`26DV`, `LP6E`) -- likely related (both about
+      `s-separate-in-line`/flow-scalar boundary handling accepting tabs and/or trailing spaces in
+      more positions), but not yet confirmed to share a single root cause; investigate together
+      since they're adjacent areas of the grammar.
+- [ ] **Zero-indented block scalar at the document root** (`DK3J`, `FP8R`, both `--- >` with
+      content starting at column 0): flagged back in Phase 3's `detect_indentation` writeup as a
+      known scope limitation (the detection scan wasn't bounded/tested at the document-root
+      sentinel indentation). Root cause understood in outline already; needs the actual fix.
+- [ ] **Bare/directives document edge cases** (`M7A3` spec 9.3, `W4TN` spec 9.5, both involve a
+      document whose content is a block literal `|` directly after `---`, plus multi-document
+      `...`-separated streams) and **`01` "Question mark edge cases"** -- not yet root-caused.
+- [ ] **`2EBW` "Allowed characters in keys"**: a plain scalar containing most of
+      `!"#$%&'()*+,-./09:;<=>?@AZ[\]^_\`az{|}~` as a block mapping key; one of 5 keys in the
+      fixture doesn't round-trip (`mapping length mismatch: expected 5, got 4`) -- likely a
+      plain-scalar char-class gap for one specific character in that set; needs isolating which.
+- [ ] **`ContentMismatch` x2, pre-existing since before Phase 5** (`01` "Trailing line of spaces",
+      `02` "Trailing whitespace in streams"): both about a block/folded or block/literal scalar's
+      final chomped-empty trailing blank line losing one line of whitespace
+      (`expected "x\n \n", got "x\n "`). Likely in `block/header.rs`'s `chomped_empty` /
+      `l-trail-comments` handling. Not yet root-caused this pass; carried over from Phase 6/7's own
+      notes where it was first observed.
+
 ### Phase 8 -- Polish (do last, or opportunistically)
 
 - [x] Clear the existing `cargo build` warnings. By the time this was picked up, `plain.rs` and
