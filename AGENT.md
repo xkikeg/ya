@@ -877,25 +877,32 @@ on its own.
       `ZH7C`). Conformance: 374/402 (93.0%) -> **385/402 (95.8%)**, fixing 11 cases in one change:
       `2SXE`, `ZH7C`, `7BMT`, `U3XV`, `E76Z`, `PW8X`, `74H7`, `HMQ5`, `7FWL`, `FH7J`, plus partial
       progress on `9KAX` (8 of its 9 documents now pass; see below for the one that doesn't).
-- [ ] **Flow-map key/value ambiguity when a shorter (wrong) alternative "succeeds" instead of
-      failing.** `X38W` ("Aliases in Flow Objects", `{ &a [a, &b b]: *b, *a : [c, *b, d]}`) and
-      the one remaining `9KAX` document (`!!map\n&a8 !!str key8: value7`, tag on its own line then
-      a separately-anchored+tagged key on the next) both fail for a *different* reason than the
-      bug above, even though the symptom looks similar. Root cause traced (see conversation/PR
-      history around 2026-07-07): `flow::map::flow_map_yaml_key_entry` calls `flow_yaml_node` for
-      the key, and `flow_yaml_node`'s "properties with no content" fallback (`Content::Empty`, a
-      legitimate rule on its own -- see Phase 2's 2d) makes it *succeed* consuming only `&a`
-      when the real key is `&a [a, &b b]` (a flow *sequence*, which only JSON-content, not
-      YAML-content, can parse) -- i.e. it stops too early instead of failing outright, so
-      `alt((yaml_key_entry, empty_key_entry, json_key_entry))` never gets to try
-      `json_key_entry`, and the leftover `[a, &b b]: *b` fails the entries loop's subsequent
-      comma-or-`}` check. This is a harder problem than the block-collection fix: it's an
-      ambiguity between two *both individually-valid-per-their-own-rule* parses (short match now
-      vs. long match later), which `alt`'s ordered-choice-without-retry semantics can't resolve by
-      construction alone -- needs either a restructured entry-level alternative that tries the
-      fuller parse first when a collection-shaped key follows, or a lookahead guard. Escalate if
-      the fix isn't obviously spec-shaped once attempted -- this is exactly the kind of thing
-      AGENT.md's own conventions ask to flag rather than hack around.
+- [x] **Flow-map key/value ambiguity when a shorter (wrong) alternative "succeeds" instead of
+      failing.** `flow::map::flow_map_yaml_key_entry` calls `flow_yaml_node` for the key, and
+      `flow_yaml_node`'s "properties with no content" fallback (`Content::Empty`, a legitimate
+      rule on its own -- see Phase 2's 2d) makes it *succeed* consuming only e.g. `&a` when the
+      real key is `&a [a, &b b]` (a flow *sequence*, which only JSON-content, not YAML-content,
+      can parse) -- i.e. it stops too early instead of failing outright, so
+      `alt((yaml_key_entry, empty_key_entry, json_key_entry))` never got to try
+      `json_key_entry`, and the leftover `[a, &b b]: *b` failed the entries loop's subsequent
+      comma-or-`}` check. Fixed not by detecting the ambiguity after the fact (a restructured
+      entry-level alternative or lookahead guard, as originally scoped here) but by sidestepping
+      it: reordered `flow_map_implicit_entry`'s (and the analogous `flow_pair_entry`'s) `alt` to
+      try the JSON-key arm *first*. A JSON-shaped key requires *mandatory* content, so it fails
+      outright (cleanly falling through to the YAML-key arm) for anything it can't parse, e.g. a
+      plain scalar key -- there's no equivalent "succeeds too early" failure mode on that side.
+      This also matches the ordering block mapping's implicit keys already used
+      (`block::map::block_map_implicit_key`: `alt((implicit_json_key, implicit_yaml_key))`), so
+      flow and block implicit keys are now consistent. Regression test:
+      `flow::map::tests::anchored_flow_sequence_key`. Fixed `X38W` ("Aliases in Flow Objects").
+      Conformance: 393/402 (97.8%) -> **394/402 (98.0%)**.
+      **Note: this did *not* fix `9KAX`'s one remaining failing document**
+      (`!!map\n&a8 !!str key8: value7`) -- that one is a genuinely different bug (`c-ns-properties`'s
+      own internal `s-separate(n,c)` greedily crossing a line break to also grab a *different*
+      node's anchor/tag as if it were a second property of the *same* group; see the
+      "Flow mapping/sequence empty-content" item's sibling investigation notes in PR history around
+      2026-07-07) -- still open, not yet its own tracked item below since it's a single obscure
+      corpus sub-case (8/9 of `9KAX`'s documents already pass).
 - [x] **Flow mapping/sequence empty-content edge cases.** Two independent, small bugs, both in
       the entries-list parsers rather than in node/content parsing itself:
       1. `flow::map::flow_map_entries`' loop conflated "no further entry here" with "there were
