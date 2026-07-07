@@ -228,6 +228,43 @@ where
 
 /// Bare document.
 ///
+/// **On `c-forbidden`** ([rule](https://yaml.org/spec/1.2.2/#rule-c-forbidden)): the spec bakes
+/// this exclusion directly into this rule's own grammar -- formally, `l-bare-document` is
+/// `s-l+block-node(-1, block-in)` restricted so that none of its lines may be `c-forbidden`
+/// (a `---`/`...` marker at the start of a line). That's a *global* property of the whole node
+/// this function produces, not something `bare_document` itself can check: it just delegates to
+/// `block_node` and returns whatever `Document` comes back, and by then the marker line (if one
+/// was swallowed) is already gone -- folded into a `Cow<str>` or consumed as part of some child
+/// node, with no raw text left here to re-scan. Enforcing the exclusion after the fact would mean
+/// re-lexing content that's already been parsed away.
+///
+/// So instead, each rule that *could* swallow a forbidden line guards against it individually, at
+/// the point where the swallowing would happen. Most rules don't need a guard at all: a block
+/// collection's entries are delimited by indentation (a `---`/`...` at column 0 is less indented
+/// than any real nested content, so the collection ends there on its own), and a single-line
+/// scalar or one with an explicit terminator (closing quote, `]`/`}`) can't run past a line it
+/// hasn't reached yet. The only rules that keep consuming lines with *no* terminator other than
+/// "this next line doesn't look like more content" are: line-folding across a multi-line scalar's
+/// continuation lines, and a block scalar's `s-indent(n)` at the document root, where `n`
+/// degenerates to 0 and so matches any line unconditionally. Those are exactly the sites that
+/// carry their own `not(document::forbidden)` guard:
+///
+/// - `plain::plain` and `plain::space_non_space_plain_next_line` (a multi-line plain scalar's
+///   first line and each continuation line, respectively),
+/// - `double::non_break_double_multi_line` (a multi-line double-quoted scalar's fold, both the
+///   escaped- and plain-line-break alternatives),
+/// - `single::non_break_single_multi_line` (a multi-line single-quoted scalar's fold),
+/// - `block::literal::literal_text` and `block::folded::folded_text` (a block scalar's content
+///   lines, where this matters only at the document root -- everywhere else the scalar's own
+///   positive indentation already discriminates a marker line the same way a block collection's
+///   does).
+///
+/// Guarding every one of those sites is behaviorally equivalent to the spec's single exclusion
+/// here at `l-bare-document`, since they're exhaustively the only paths that could ever reach a
+/// forbidden line as if it were ordinary content -- but it avoids threading a "we're inside a
+/// bare document, stop at markers" flag down through every intermediate rule (`block_node` and
+/// everything it calls) just to reach the handful of leaf rules that actually need it.
+///
 /// https://yaml.org/spec/1.2.2/#rule-l-bare-document
 #[doc(alias = "l-bare-document")]
 pub fn bare_document<'i, Input, Error>(input: &mut Input) -> winnow::Result<Document<'i>, Error>
@@ -592,6 +629,30 @@ mod tests {
                 value::Stream(vec![
                     value::Document(game_event("20:03:20", "Sammy Sosa", "strike")),
                     value::Document(game_event("20:03:47", "Sammy Sosa", "grand slam")),
+                ])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
+    /// Corpus case `W4TN` (spec 9.5 "Directives Documents", full stream): a root-level (`n=-1`)
+    /// block literal used to swallow the `...` document-end marker and everything after it as
+    /// more of its own content, since `s-indent(0)` matches trivially and `literal_text` had no
+    /// guard against a `---`/`...` marker line -- the same hazard already fixed for plain/quoted
+    /// scalars, just unreachable for a root-level block scalar before the zero-indentation fix
+    /// this test landed alongside. This is a genuine two-document stream: a directived document
+    /// whose sole content is a block literal, followed by a second, empty directived document.
+    #[test]
+    fn stream_corpus_w4tn() {
+        let input = "%YAML 1.2\n--- |\n%!PS-Adobe-2.0\n...\n%YAML 1.2\n---\n# Empty\n...\n";
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![
+                    value::Document(Node::unspecified(Content::Scalar(value::Scalar::Literal(
+                        Cow::Borrowed("%!PS-Adobe-2.0\n")
+                    )))),
+                    value::Document(Node::unspecified(Content::Empty)),
                 ])
             ),
             testing::parse(yaml_stream, input).unwrap()

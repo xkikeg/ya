@@ -35,17 +35,10 @@ where
     trace(
         "plain::plain",
         preceded(
-            // The spec formally scopes `c-forbidden` as an exclusion on `l-bare-document`
-            // (https://yaml.org/spec/1.2.2/#rule-l-bare-document): a bare document's content
-            // must not start with a `---`/`...` marker line. We check it here instead of at
-            // that level because the only way a forbidden line could ever end up consumed as
-            // scalar content is if a plain scalar's line folding swallows it -- either as the
-            // scalar's very first line (right here) or as a later continuation line (the same
-            // check in `space_non_space_plain_next_line` below). Guarding both of those spots
-            // is behaviorally equivalent to the spec's `l-bare-document`-level exclusion,
-            // without threading a "we're inside a bare document" flag down through
-            // flow_node/flow_content/flow_yaml_content just to reach this one rule. Block
-            // scalars/collections will need their own guard once they exist (Phase 3/4).
+            // Guards the scalar's own first line against swallowing a `---`/`...` marker; see
+            // `document::bare_document`'s doc comment for why `c-forbidden` is checked here
+            // (and in `space_non_space_plain_next_line` below, for continuation lines) instead
+            // of once at `l-bare-document` where the spec formally scopes it.
             not(document::forbidden),
             Context::non_space_plain(indent_level),
         )
@@ -103,9 +96,8 @@ where
         "plain::space_non_space_plain_next_line",
         (
             spaces::flow_folded(indent_level),
-            // A multi-line plain scalar must not swallow a `---`/`...` document marker line
-            // either; see the comment on `plain()` above for why this check lives here rather
-            // than at `l-bare-document` where the spec formally scopes it.
+            // Continuation-line counterpart of the guard in `plain()` above; see
+            // `document::bare_document`'s doc comment for the full rationale.
             not(document::forbidden).void(),
             (
                 non_space_plain_char(context),

@@ -954,10 +954,19 @@ on its own.
       Conformance: 394/402 (98.0%) -> **397/402 (98.8%)**, fixing `DK3J`, `FP8R`, and `M7A3` (a
       document consisting entirely of a zero-indented block literal, previously miscategorized
       as a "bare/directives document" issue below -- it was this same bug).
-- [ ] **`W4TN`** (spec 9.5 "Directives Documents"): improved by the fix above (was a parse error,
-      now `StructuralMismatch: document count mismatch: expected 2, got 1`) but not fully fixed --
-      a `%YAML`-directived document followed by `...` and a second, empty (`# Empty` comment-only)
-      document isn't producing two documents. Not yet root-caused past this point.
+- [x] **`W4TN`** (spec 9.5 "Directives Documents"). Root cause: a root-level (`n=-1`) block
+      scalar's `literal_text`/`folded_text` had no guard against a `---`/`...` marker line, unlike
+      plain and quoted scalars (Phase 1g/5e already added one there). This was unreachable before
+      the zero-indentation fix above -- a root-level block scalar could never consume any content
+      at all, so it could never reach a marker line either -- but once content parsing worked,
+      `s-indent(0)` matches trivially (consumes nothing), so a block literal whose content was the
+      entire first document would happily keep consuming right through the `...` document-end
+      marker and the *second* document's raw text, swallowing both as if they were more of its own
+      content. Fixed by adding a `not(document::forbidden)` guard to both `literal_text` and
+      `folded_text` (mirroring the existing plain/quoted-scalar guard); `spaced_text` needs no
+      equivalent guard since a marker line never starts with whitespace. Regression test:
+      `document.rs::stream_corpus_w4tn`.
+      Conformance: 397/402 (98.8%) -> **398/402 (99.0%)**.
       **`01` "Question mark edge cases"** was already fixed incidentally by an earlier PR in this
       phase (the empty-flow-sequence fix) -- removed from this item since there's nothing left to
       root-cause there.
