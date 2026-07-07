@@ -896,18 +896,33 @@ on its own.
       fuller parse first when a collection-shaped key follows, or a lookahead guard. Escalate if
       the fix isn't obviously spec-shaped once attempted -- this is exactly the kind of thing
       AGENT.md's own conventions ask to flag rather than hack around.
-- [ ] **Flow mapping/sequence empty-content edge cases**: `FRK4` (spec 7.3, `{? foo :, : bar,}`),
-      `WZ62` (spec 7.2, `{foo : !!str, !!str : bar,}`), `5C5M` (spec 7.15 flow mappings),
-      `4ABK` (flow mapping separate values with a bare URI-like plain scalar entry), `7ZZ5`
-      (`[]`/`{}` empty flow collections nested in block context). All show as
-      `StructuralMismatch: mapping length mismatch` or a parse error -- likely a shared root cause
-      around completely-empty flow node/entry handling, but not yet root-caused as precisely as
-      the block-collection bug; investigate as its own PR.
-- [ ] **Tab-indented flow** (`6CA3`, `\t[\n\t]`) and **whitespace-around-colon /
-      whitespace-after-scalars in flow** (`26DV`, `LP6E`) -- likely related (both about
-      `s-separate-in-line`/flow-scalar boundary handling accepting tabs and/or trailing spaces in
-      more positions), but not yet confirmed to share a single root cause; investigate together
-      since they're adjacent areas of the grammar.
+- [x] **Flow mapping/sequence empty-content edge cases.** Two independent, small bugs, both in
+      the entries-list parsers rather than in node/content parsing itself:
+      1. `flow::map::flow_map_entries`' loop conflated "no further entry here" with "there were
+         never any entries": `match elem { None => return Ok(Vec::new()), ... }` discarded
+         *every* already-collected entry, not just the current (absent) one, whenever a trailing
+         comma was immediately followed by the closing `}` (e.g. `{a: 1, b: 2,}`). Fixed by
+         returning `Ok(ret)` instead -- on the very first iteration `ret` is already
+         `Vec::new()`, so the genuinely-empty-`{}` case still works identically. Fixed `FRK4`,
+         `WZ62`, `5C5M`, `4ABK`.
+      2. `flow::seq::flow_sequence` called `flow_seq_entries` directly (unwrapped), but
+         `ns-s-flow-seq-entries` itself always matches >= 1 entry by construction (its own `?`
+         belongs to the *caller*, `c-flow-sequence`, per the spec's literal composition) -- so a
+         completely empty `[]` could never parse at all. Fixed by wrapping the call in
+         `opt(...).map(Option::unwrap_or_default)` at the `flow_sequence` call site, matching the
+         spec's own grammar shape (rather than copying `flow_map_entries`' different, so-labelled
+         "modified from spec" approach). Fixed `7ZZ5` (nested `[]`/`{}` in block context), plus
+         `6CA3` (tab-indented empty flow seq), `LP6E` (whitespace after scalars in flow, which
+         includes a `[      ]` case), and a second `01`-numbered "Question mark edge cases" case.
+      Regression tests added in both modules' own (newly-added) `#[cfg(test)] mod tests`.
+      Conformance: 385/402 (95.8%) -> **393/402 (97.8%)**, fixing 8 cases with these two small,
+      independent changes.
+- [x] ~~Tab-indented flow (`6CA3`) and whitespace-around-colon / whitespace-after-scalars in
+      flow (`26DV`, `LP6E`)~~ -- all three turned out to already be resolved by other fixes above,
+      not a shared tab/whitespace-handling gap of their own: `6CA3` and `LP6E` were instances of
+      the empty-flow-sequence bug (just fixed above), and `26DV` (anchors/aliases directly on
+      block-mapping keys, e.g. `*alias1 : scalar3`) was an instance of the block-collection
+      leading-properties backtracking bug (fixed earlier this phase). Nothing left to do here.
 - [ ] **Zero-indented block scalar at the document root** (`DK3J`, `FP8R`, both `--- >` with
       content starting at column 0): flagged back in Phase 3's `detect_indentation` writeup as a
       known scope limitation (the detection scan wasn't bounded/tested at the document-root

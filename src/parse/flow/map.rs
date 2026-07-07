@@ -62,7 +62,12 @@ where
             )
             .parse_next(input)?;
             match elem {
-                None => return Ok(Vec::new()),
+                // No further entry here -- whether this is the very first iteration (a
+                // genuinely empty `{}`) or after a trailing comma (`{a: 1,}`), either way it
+                // means "stop, and return whatever's been collected so far", *not* "discard
+                // everything collected so far": `ret` is already `Vec::new()` on the first
+                // iteration, so this also correctly handles the empty-mapping case.
+                None => return Ok(ret),
                 Some(x) => ret.push(x),
             };
             let comma = terminated(opt(','), opt(spaces::separate(context, indent_level)))
@@ -276,4 +281,55 @@ where
         )
         .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::borrow::Cow;
+
+    use crate::{
+        parse::{context::FlowIn, testing},
+        value::Scalar,
+    };
+
+    fn plain(s: &str) -> Node<'_> {
+        Node::unspecified(Content::Scalar(Scalar::Plain(Cow::Borrowed(s))))
+    }
+
+    /// A trailing comma before the closing `}` used to make the whole entries loop discard
+    /// *every* already-collected entry (`None => return Ok(Vec::new())`), not just stop cleanly,
+    /// because "no further entry here" was conflated with "there were never any entries" --
+    /// corpus case `5C5M` (spec 7.15 "Flow Mappings") is one of several that depend on this.
+    #[test]
+    fn trailing_comma_keeps_already_collected_entries() {
+        let (rest, got) = testing::parse(
+            flow_map_entries(FlowIn, IndentLevel::initial()),
+            "one: two, three: four, }",
+        )
+        .unwrap();
+        assert_eq!("}", rest);
+        assert_eq!(
+            vec![
+                MapEntry {
+                    key: plain("one"),
+                    value: plain("two"),
+                },
+                MapEntry {
+                    key: plain("three"),
+                    value: plain("four"),
+                },
+            ],
+            got
+        );
+    }
+
+    #[test]
+    fn empty_entries() {
+        let (rest, got) =
+            testing::parse(flow_map_entries(FlowIn, IndentLevel::initial()), "}").unwrap();
+        assert_eq!("}", rest);
+        assert_eq!(Vec::<MapEntry<'_>>::new(), got);
+    }
 }
