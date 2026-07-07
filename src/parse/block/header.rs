@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use winnow::{
-    combinator::{alt, eof, opt, repeat, trace},
+    combinator::{alt, eof, opt, repeat, terminated, trace},
     error::{StrContext, StrContextValue},
     token::{one_of, take_while},
     Parser,
@@ -215,7 +215,13 @@ where
                 alt((chars::line_break.value(""), eof.value(""))).parse_next(input)
             }
             ChompingMode::Clip | ChompingMode::Keep => {
-                alt((chars::break_as_line_feed, eof.value(""))).parse_next(input)
+                // The source need not end with a final line break (yaml-test-suite cases `L24T`
+                // /01, `JEF9`/02): reaching end-of-input right where a break was expected is
+                // still "the last line had content", so it must still get Clip/Keep's one
+                // trailing line feed, exactly as it would if that last line really were
+                // newline-terminated. Mirrors `spaces::break_comment`'s existing
+                // `alt((line_break, eof))` allowance for the analogous `s-b-comment` case.
+                alt((chars::break_as_line_feed, eof.value("\n"))).parse_next(input)
             }
         },
     )
@@ -286,7 +292,7 @@ where
 {
     trace("block::header::keep_empty", move |input: &mut Input| {
         let count: usize =
-            repeat(0.., spaces::line_empty(BlockIn, indent_level)).parse_next(input)?;
+            repeat(0.., trailing_line_empty(indent_level)).parse_next(input)?;
         opt(trail_comments(indent_level)).parse_next(input)?;
         if count > 0 {
             Ok(Cow::Owned("\n".repeat(count)))
@@ -294,6 +300,39 @@ where
             Ok(Cow::Borrowed(""))
         }
     })
+}
+
+/// One trailing blank line, for [`keep_empty`]'s purposes: an ordinary [`spaces::line_empty`],
+/// or -- when the source doesn't end with a final line break (yaml-test-suite case `JEF9`/02) --
+/// the whitespace-only remainder run up to end-of-input, treated the same way. Mirrors
+/// `spaces::break_comment`'s existing `alt((line_break, eof))` allowance for the analogous
+/// `s-b-comment` case. Guarded with the same "must consume" `.verify(...)` used elsewhere
+/// (`document.rs`'s `document_prefix`, `trail_comments` above) since an eof-terminated *empty*
+/// match (already at true end-of-input, nothing left at all) would otherwise let the caller's
+/// `repeat` spin forever re-matching zero-width success.
+fn trailing_line_empty<'i, Input, Error>(
+    indent_level: IndentLevel,
+) -> impl Parser<Input, (), Error> + use<'i, Input, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "block::header::trailing_line_empty",
+        alt((
+            spaces::line_empty(BlockIn, indent_level).void(),
+            terminated(
+                alt((
+                    spaces::line_prefix(BlockIn, indent_level),
+                    spaces::indent_less_than(indent_level),
+                ))
+                .take()
+                .verify(|s: &str| !s.is_empty()),
+                eof,
+            )
+            .void(),
+        )),
+    )
 }
 
 /// Trailing comment lines, less indented than the block scalar's content.
@@ -425,5 +464,17 @@ mod tests {
             testing::parse(detect_indentation(IndentLevel::initial()), "line1\nline2\n").unwrap();
         assert_eq!("line1\nline2\n", rest);
         assert_eq!(Some(IndentLevel::new(0)), detected.content);
+    }
+
+    /// Regression test for yaml-test-suite case `JEF9`/02 ("Trailing whitespace in streams"): a
+    /// Keep-chomped block scalar whose only "content" is a single blank, over-indented line with
+    /// no terminating line break at all (the file just ends). That line must still be recognized
+    /// as one blank trailing line (contributing `"\n"`), the same as if it were newline-terminated
+    /// -- see `trailing_line_empty`'s own comment.
+    #[test]
+    fn keep_empty_counts_final_blank_line_with_no_trailing_break() {
+        let (rest, got) = testing::parse(keep_empty(IndentLevel::new(3)), "   ").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Cow::<str>::Owned("\n".to_string()), got);
     }
 }

@@ -489,6 +489,34 @@ mod tests {
         );
     }
 
+    /// Corpus case `9KAX`'s last document ("Various combinations of tags and anchors"):
+    /// `!!map\n&a8 !!str key8: value7`. The block collection's own tag (`!!map`) stands alone on
+    /// its line, and the anchor on the *next* line (`&a8`) belongs to the nested mapping's first
+    /// implicit key, not to the collection -- `properties::properties`'s own greedy trailing-
+    /// anchor-after-tag lookup must not cross that line break and swallow it, the same class of
+    /// bug `anchor_on_implicit_block_mapping_key_corpus_zh7c` covers one level up.
+    #[test]
+    fn tag_alone_on_its_line_does_not_swallow_next_lines_key_anchor_corpus_9kax() {
+        let input = "!!map\n&a8 !!str key8: value7\n";
+        let key8 = Node::new(
+            Content::Scalar(value::Scalar::Plain(Cow::Borrowed("key8"))),
+            value::Tag::Global(Cow::Borrowed("tag:yaml.org,2002:str")),
+        );
+        assert_eq!(
+            (
+                "",
+                value::Stream(vec![value::Document(Node::new(
+                    Content::Map(value::Mapping(vec![value::MapEntry {
+                        key: key8,
+                        value: plain("value7"),
+                    }])),
+                    value::Tag::Global(Cow::Borrowed("tag:yaml.org,2002:map")),
+                ))])
+            ),
+            testing::parse(yaml_stream, input).unwrap()
+        );
+    }
+
     #[test]
     fn explicit_document_same_line_content() {
         assert_eq!(
