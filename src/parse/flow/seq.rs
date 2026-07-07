@@ -31,7 +31,14 @@ where
         "flow::seq::flow_sequence",
         delimited(
             (one_of('['), opt(spaces::separate(context, indent_level))),
-            flow_seq_entries(<Context::Flow as YamlContext>::get(), indent_level),
+            // `ns-s-flow-seq-entries(n,c)` itself always matches >= 1 entry; per
+            // `c-flow-sequence`'s own composition, it's the trailing `?` *here*, at the call
+            // site, that allows a completely empty `[]`.
+            opt(flow_seq_entries(
+                <Context::Flow as YamlContext>::get(),
+                indent_level,
+            ))
+            .map(Option::unwrap_or_default),
             one_of(']'),
         ),
     )
@@ -93,4 +100,30 @@ where
             super::node::flow_node(context, indent_level),
         )),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::parse::{context::FlowOut, testing};
+
+    /// `ns-s-flow-seq-entries(n,c)` itself always matches >= 1 entry; the empty-sequence case
+    /// (corpus case `7ZZ5` "Empty flow collections", among others) depends on `c-flow-sequence`
+    /// making that whole group optional at its own call site instead.
+    #[test]
+    fn empty_sequence() {
+        let (rest, got) =
+            testing::parse(flow_sequence(FlowOut, IndentLevel::initial()), "[]").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Vec::<Node<'_>>::new(), got);
+    }
+
+    #[test]
+    fn empty_sequence_with_inner_separation() {
+        let (rest, got) =
+            testing::parse(flow_sequence(FlowOut, IndentLevel::initial()), "[   ]").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Vec::<Node<'_>>::new(), got);
+    }
 }
