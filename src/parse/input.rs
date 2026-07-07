@@ -1,7 +1,7 @@
 //! Defines [`InputStream`] which is just a trait alias.
 
 use winnow::{
-    stream::{self, Compare, Stream, StreamIsPartial},
+    stream::{self, AsBStr, Compare, Stream, StreamIsPartial},
     LocatingSlice, Stateful,
 };
 
@@ -136,6 +136,12 @@ impl<'i> TrackStartOfLine for Input<'i> {
 impl<'i> stream::Offset<<Input<'i> as Stream>::Checkpoint> for Input<'i> {
     fn offset_from(&self, start: &<Input<'i> as Stream>::Checkpoint) -> usize {
         self.inner.offset_from(start)
+    }
+}
+
+impl<'i> AsBStr for Input<'i> {
+    fn as_bstr(&self) -> &[u8] {
+        self.inner.as_bstr()
     }
 }
 
