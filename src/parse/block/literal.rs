@@ -158,6 +158,18 @@ mod tests {
         );
     }
 
+    /// Regression test for yaml-test-suite case `L24T`/01 ("Trailing line of spaces"): the
+    /// source's very last line has no terminating line break at all (the file just ends), yet
+    /// Clip chomping must still contribute exactly one trailing `\n`, the same as it would if
+    /// that last line really were newline-terminated. See `header::chomped_last`'s own comment.
+    #[test]
+    fn literal_clip_adds_final_break_when_source_has_none() {
+        let (rest, got) =
+            testing::parse(literal(IndentLevel::new(0)), "|\n  x\n   ").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(Cow::<str>::Owned("x\n \n".to_string()), got);
+    }
+
     #[test]
     fn literal_strip_drops_final_break() {
         assert_eq!(

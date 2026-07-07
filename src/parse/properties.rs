@@ -87,7 +87,9 @@ where
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-ns-tag-property
 #[doc(alias = "c-ns-tag-property")]
-fn tag_property<'i, Input, Error>(input: &mut Input) -> winnow::Result<TagProperty<'i>, Error>
+pub(super) fn tag_property<'i, Input, Error>(
+    input: &mut Input,
+) -> winnow::Result<TagProperty<'i>, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
@@ -227,7 +229,9 @@ where
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-ns-anchor-property
 #[doc(alias = "c-ns-anchor-property")]
-fn anchor_property<'i, Input, Error>(input: &mut Input) -> winnow::Result<&'i str, Error>
+pub(super) fn anchor_property<'i, Input, Error>(
+    input: &mut Input,
+) -> winnow::Result<&'i str, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,

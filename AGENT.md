@@ -852,11 +852,12 @@ category.
       `cargo bench --bench benchmark -- --test` (a single untimed smoke run, not the full
       statistical suite) that the updated input still parses successfully.
 
-### Phase 7b -- Closing the remaining conformance gap to 100% (started post-Phase-7/8; in progress)
+### Phase 7b -- Closing the remaining conformance gap to 100% -- DONE
 
-Goal: 402/402, so CI can eventually run the full corpus with no skips. Tackled as independent,
-small PRs (one root cause each) rather than one large change -- each item below is scoped to land
-on its own.
+Goal: 402/402, so CI can run the full corpus with no skips. Tackled as independent, small PRs (one
+root cause each) rather than one large change -- each item below landed on its own. **Reached
+402/402 (100.0%)**; `check_test_suite` (previously `--skip`ped in CI, see `.github/workflows/ci.yml`)
+now runs unskipped.
 
 - [x] **Block-collection leading-properties backtracking bug.** `block::node::block_collection`'s
       `( s-separate(n+1,c) c-ns-properties(n+1,c) )?` group was coded as an `opt(...)` around
@@ -986,12 +987,57 @@ on its own.
       exercising it, so neither was touched here -- flag if a future case needs it.) Regression
       test: `document.rs::allowed_characters_in_keys_corpus_2ebw`.
       Conformance: 398/402 (99.0%) -> **399/402 (99.3%)**.
-- [ ] **`ContentMismatch` x2, pre-existing since before Phase 5** (`01` "Trailing line of spaces",
-      `02` "Trailing whitespace in streams"): both about a block/folded or block/literal scalar's
-      final chomped-empty trailing blank line losing one line of whitespace
-      (`expected "x\n \n", got "x\n "`). Likely in `block/header.rs`'s `chomped_empty` /
-      `l-trail-comments` handling. Not yet root-caused this pass; carried over from Phase 6/7's own
-      notes where it was first observed.
+- [x] **`ContentMismatch` x2, pre-existing since before Phase 5** (`L24T`/01 "Trailing line of
+      spaces", `JEF9`/02 "Trailing whitespace in streams"): both are a source file that doesn't
+      end with a final line break at all -- the file just stops right where a break would
+      normally be expected, at the very end of a Clip- or Keep-chomped block scalar. Two
+      independent gaps in `block/header.rs`, both instances of "an EOF right here should be
+      treated the same as a real line break," a convention this file already established for
+      `s-b-comment` (`spaces::break_comment`'s existing `alt((line_break, eof))`) but hadn't
+      carried over to block-scalar chomping:
+      1. `chomped_last` (`b-chomped-last`) matched `eof` for Clip/Keep but contributed `""`,
+         literally following `<end-of-input>`'s own definition ("matches the empty string") --
+         but Clip/Keep's whole point is *exactly one* trailing `\n` whenever the last line had
+         content, whether or not that line happens to be terminated by a real break or by simply
+         running out of input. Fixed by changing that branch's contribution to `"\n"`. Fixes
+         `L24T`/01 (`foo: |\n  x\n   ` with no trailing newline; the extra space on line 2 is
+         real content already captured by `literal_text`, so only the final chomped-newline was
+         missing).
+      2. `keep_empty` (`l-keep-empty`)'s trailing-blank-line count used `spaces::line_empty`
+         directly, which requires an actual `b-as-line-feed` -- so a scalar whose *only* line is
+         all-whitespace and lacks a trailing break (`JEF9`/02: `- |+\n   ` with nothing after)
+         couldn't be recognized as one blank line at all, undercounting by one. Fixed by adding a
+         new `trailing_line_empty` helper (ordinary `line_empty`, or the same line-prefix/
+         indent-less-than check terminated by `eof` instead of a break, guarded with the
+         established `.verify(!s.is_empty())` non-zero-consumption pattern so a *truly* empty
+         remainder at true EOF doesn't get counted as a phantom extra blank line) and using it in
+         `keep_empty`'s `repeat`. `strip_empty` (Strip/Clip's trailing-blank-line discard) was
+         deliberately left untouched: no known corpus case exercises the analogous gap there, and
+         since Strip/Clip discard the trailing blank lines' content either way, an unconsumed
+         whitespace-only EOF remainder there was already harmless (parsing itself still succeeds).
+      Regression tests: `block::literal::tests::literal_clip_adds_final_break_when_source_has_none`,
+      `block::header::tests::keep_empty_counts_final_blank_line_with_no_trailing_break`.
+      Conformance: 399/402 (99.3%) -> **401/402 (99.8%)**.
+- [x] **`9KAX`'s last remaining document** (`!!map\n&a8 !!str key8: value7`), the one sub-case the
+      block-collection leading-properties fix (above) didn't cover. Root cause, found with
+      winnow's `debug` feature (`cargo build --features winnow/debug`) tracing the exact parse:
+      the *same* commit-too-early hazard as that earlier fix, but one level deeper, *inside*
+      `properties::properties` itself rather than in `block_collection`'s own wrapper around it.
+      `properties()`'s `(tag_property (s-separate(n,c) anchor_property)?)` will happily cross a
+      line break via `s-separate` to pick up `&a8` on the next line as if it completed *this*
+      node's own property group -- but here `&a8` actually belongs to a different, later node (the
+      nested mapping's first implicit key). By the time `block_collection`'s mandatory trailing
+      `s-l-comments` check discovers that this greedy combo doesn't actually stand alone on its own
+      line, `properties()` has already returned `Ok`, and ordinary `alt`/`opt` backtracking can't
+      reach back into an already-succeeded sub-parse to retry it with a narrower result -- only
+      `properties()`'s own caller can retry, and only by trying narrower shapes as flat, sibling
+      alternatives of the *same* combinator that also checks `s-l-comments`. Fixed by widening
+      `tag_property`/`anchor_property` from private to `pub(super)` and adding two more fallback
+      arms to `block_collection`'s own `props` alt (tag-only, anchor-only -- each individually
+      `delimited` by the same `s-l-comments` check), tried after the existing greedy-combo arm and
+      before the no-properties arm. Regression test:
+      `document.rs::tag_alone_on_its_line_does_not_swallow_next_lines_key_anchor_corpus_9kax`.
+      Conformance: 401/402 (99.8%) -> **402/402 (100.0%)**.
 
 ### Phase 8 -- Polish (do last, or opportunistically)
 

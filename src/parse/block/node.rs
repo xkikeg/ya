@@ -82,6 +82,20 @@ where
 /// genuine alternatives (`alt`), not as an `opt(...)` group whose success is locked in before its
 /// consequences (the trailing `s-l-comments`) are known.
 ///
+/// **A second, deeper instance of that same commit-too-early hazard lives *inside*
+/// [`properties::properties`] itself** (yaml-test-suite case `9KAX`'s last document, `!!map\n&a8
+/// !!str key8: value7`): its own `(tag_property (s-separate(n,c) anchor_property)?)` allows the
+/// optional trailing anchor/tag to cross a line break freely, with no way to know from inside
+/// `properties()` that the anchor on the next line (`&a8`) actually belongs to a completely
+/// different, later node (the nested mapping's first key) rather than completing *this*
+/// collection's own property group. Once `properties()` returns `Ok` having greedily consumed
+/// both, that choice is locked in -- `alt`/`opt` only backtrack into their own listed arms, never
+/// back into an already-`Ok` sub-parse just because something *later* (here, this same
+/// `s-l-comments` check) fails. So the fix is the same shape one level down: enumerate the
+/// narrower interpretations (tag-only, anchor-only) as explicit fallback arms *at this call site*
+/// -- where `s-l-comments` is checked -- rather than trying to make `properties()` itself smarter
+/// about what follows it (it has no way to know; only this caller does).
+///
 /// https://yaml.org/spec/1.2.2/#rule-s-l+block-collection
 #[doc(alias = "s-l+block-collection")]
 fn block_collection<'i, Context, Input, Error>(
@@ -99,6 +113,24 @@ where
             delimited(
                 spaces::separate(context, indent_level + 1),
                 properties::properties(context, indent_level + 1),
+                spaces::line_comments,
+            )
+            .map(Some),
+            delimited(
+                spaces::separate(context, indent_level + 1),
+                properties::tag_property.map(|tag| properties::Properties {
+                    anchor: None,
+                    tag: Some(tag),
+                }),
+                spaces::line_comments,
+            )
+            .map(Some),
+            delimited(
+                spaces::separate(context, indent_level + 1),
+                properties::anchor_property.map(|anchor| properties::Properties {
+                    anchor: Some(anchor),
+                    tag: None,
+                }),
                 spaces::line_comments,
             )
             .map(Some),
