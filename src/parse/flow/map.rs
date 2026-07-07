@@ -145,9 +145,19 @@ where
     trace(
         "flow::map::flow_map_implicit_entry",
         alt((
+            // JSON-key tried first, matching the same ordering already established for block
+            // mapping implicit keys (`block::map::block_map_implicit_key`): a JSON-shaped key
+            // (a flow collection, or a quoted scalar) requires *mandatory* content, so it fails
+            // outright -- and cleanly falls through to the YAML-key arm -- for anything it can't
+            // parse (e.g. a plain scalar key). But `ns-flow-yaml-node`'s "properties with no
+            // content" fallback (legitimate on its own, e.g. `!!str &a` alone) makes the YAML-key
+            // arm *always succeed*, even on a collection-shaped key like `&a [x, &b b]`, by
+            // simply stopping right after the property and leaving the collection unconsumed --
+            // which is wrong, but not a parse failure `alt` can backtrack past. Trying JSON first
+            // sidesteps the ambiguity entirely instead of trying to detect it after the fact.
+            flow_map_json_key_entry(context, indent_level),
             flow_map_yaml_key_entry(context, indent_level),
             flow_map_empty_key_entry(context, indent_level),
-            flow_map_json_key_entry(context, indent_level),
         )),
     )
 }
@@ -331,5 +341,24 @@ mod tests {
             testing::parse(flow_map_entries(FlowIn, IndentLevel::initial()), "}").unwrap();
         assert_eq!("}", rest);
         assert_eq!(Vec::<MapEntry<'_>>::new(), got);
+    }
+
+    /// An anchor directly preceding a flow-*sequence*-shaped key (corpus case `X38W`, "Aliases in
+    /// Flow Objects") used to be mis-parsed by the YAML-key arm alone: `ns-flow-yaml-node`'s
+    /// legitimate "properties with no content" fallback let it stop right after the anchor,
+    /// leaving the sequence unconsumed, instead of failing outright and letting the JSON-key arm
+    /// (which requires content, and so correctly parses the sequence) take over. Trying the
+    /// JSON-key arm first sidesteps the ambiguity.
+    #[test]
+    fn anchored_flow_sequence_key() {
+        let (rest, got) = testing::parse(
+            flow_map_entries(FlowIn, IndentLevel::initial()),
+            "&a [a, &b b]: *b }",
+        )
+        .unwrap();
+        assert_eq!("}", rest);
+        assert_eq!(1, got.len());
+        assert_eq!(Content::Seq(vec![plain("a"), plain("b")]), got[0].key.value);
+        assert_eq!(plain("b"), got[0].value);
     }
 }
