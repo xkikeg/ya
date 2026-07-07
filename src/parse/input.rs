@@ -244,211 +244,6 @@ impl<'i> Stream for Input<'i> {
     }
 }
 
-/// input type restricting the input to certain length.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct WithLimit<I> {
-    inner: I,
-    /// Remaining tokens.
-    limit: usize,
-}
-
-impl<I> WithLimit<I> {
-    /// Create a new instance.
-    pub fn new(inner: I, limit: usize) -> Self {
-        Self { inner, limit }
-    }
-
-    /// Takes out the inner.
-    pub fn into_inner(self) -> I {
-        self.inner
-    }
-}
-
-impl<'i, I> WithAnchorStore<'i> for WithLimit<I>
-where
-    I: WithAnchorStore<'i> + 'i,
-{
-    fn anchor_store(&self) -> &AnchorStore<'i> {
-        self.inner.anchor_store()
-    }
-
-    fn anchor_store_mut(&mut self) -> &mut AnchorStore<'i> {
-        self.inner.anchor_store_mut()
-    }
-}
-
-impl<'i, I> WithTagHandles<'i> for WithLimit<I>
-where
-    I: WithTagHandles<'i> + 'i,
-{
-    fn tag_handles(&self) -> &TagHandles<'i> {
-        self.inner.tag_handles()
-    }
-
-    fn tag_handles_mut(&mut self) -> &mut TagHandles<'i> {
-        self.inner.tag_handles_mut()
-    }
-}
-
-impl<I: TrackStartOfLine> TrackStartOfLine for WithLimit<I> {
-    fn is_start_of_line(&self) -> bool {
-        self.inner.is_start_of_line()
-    }
-
-    fn previous_char(&self) -> Option<char> {
-        self.inner.previous_char()
-    }
-}
-
-impl<I: Stream> stream::Offset<<I as Stream>::Checkpoint> for WithLimit<I> {
-    fn offset_from(&self, start: &<I as Stream>::Checkpoint) -> usize {
-        self.inner.offset_from(start)
-    }
-}
-
-impl<I: StreamIsPartial> StreamIsPartial for WithLimit<I> {
-    type PartialState = <I as StreamIsPartial>::PartialState;
-
-    fn complete(&mut self) -> Self::PartialState {
-        self.inner.complete()
-    }
-
-    fn restore_partial(&mut self, state: Self::PartialState) {
-        self.inner.restore_partial(state);
-    }
-
-    fn is_partial_supported() -> bool {
-        <I as StreamIsPartial>::is_partial_supported()
-    }
-}
-
-impl<I, T> Compare<T> for WithLimit<I>
-where
-    I: Compare<T>,
-{
-    fn compare(&self, t: T) -> stream::CompareResult {
-        self.inner.compare(t)
-    }
-}
-
-impl<I: Stream> Stream for WithLimit<I> {
-    type Token = <I as Stream>::Token;
-
-    type Slice = <I as Stream>::Slice;
-
-    type IterOffsets = std::iter::Take<<I as Stream>::IterOffsets>;
-
-    type Checkpoint = <I as Stream>::Checkpoint;
-
-    #[inline(always)]
-    fn iter_offsets(&self) -> Self::IterOffsets {
-        self.inner.iter_offsets().take(self.limit)
-    }
-
-    #[inline(always)]
-    fn eof_offset(&self) -> usize {
-        // EOF offset is the offset after all available tokens,
-        // so token[limit+1].offset, or inner.eof_offset()
-        self.inner
-            .iter_offsets()
-            .nth(self.limit + 1)
-            .map(|(s, _)| s)
-            .unwrap_or(self.inner.eof_offset())
-    }
-
-    #[inline(always)]
-    fn next_token(&mut self) -> Option<Self::Token> {
-        if self.limit == 0 {
-            None
-        } else {
-            self.limit -= 1;
-            self.inner.next_token()
-        }
-    }
-
-    #[inline(always)]
-    fn peek_token(&self) -> Option<Self::Token> {
-        if self.limit == 0 {
-            None
-        } else {
-            self.inner.peek_token()
-        }
-    }
-
-    #[inline(always)]
-    fn offset_for<P>(&self, predicate: P) -> Option<usize>
-    where
-        P: Fn(Self::Token) -> bool,
-    {
-        for (o, c) in self.iter_offsets() {
-            if predicate(c) {
-                return Some(o);
-            }
-        }
-        None
-    }
-
-    #[inline(always)]
-    fn offset_at(&self, tokens: usize) -> Result<usize, winnow::error::Needed> {
-        // since this struct limits the length of token,
-        // naturally tokens > limits is an error.
-        if tokens > self.limit {
-            return Err(winnow::error::Needed::Unknown);
-        }
-        let mut cnt = 0;
-        for (o, _) in self.inner.iter_offsets().take(self.limit + 1) {
-            if cnt == tokens {
-                return Ok(o);
-            }
-            cnt += 1;
-        }
-        if cnt == tokens {
-            // this happens when limit == tokens == remaining tokens in self.
-            Ok(self.inner.eof_offset())
-        } else {
-            Err(winnow::error::Needed::Unknown)
-        }
-    }
-
-    #[inline(always)]
-    fn next_slice(&mut self, offset: usize) -> Self::Slice {
-        // just delegate to inner assuming the offset is taken with offset_for / offset_at.
-        self.inner.next_slice(offset)
-    }
-
-    #[inline(always)]
-    unsafe fn next_slice_unchecked(&mut self, offset: usize) -> Self::Slice {
-        // SAFETY: Passing up invariants
-        unsafe { self.inner.next_slice_unchecked(offset) }
-    }
-
-    #[inline(always)]
-    fn peek_slice(&self, offset: usize) -> Self::Slice {
-        self.inner.peek_slice(offset)
-    }
-
-    #[inline(always)]
-    unsafe fn peek_slice_unchecked(&self, offset: usize) -> Self::Slice {
-        // SAFETY: Passing up invariants
-        unsafe { self.inner.peek_slice_unchecked(offset) }
-    }
-
-    #[inline(always)]
-    fn checkpoint(&self) -> Self::Checkpoint {
-        self.inner.checkpoint()
-    }
-
-    #[inline(always)]
-    fn reset(&mut self, checkpoint: &Self::Checkpoint) {
-        self.inner.reset(checkpoint)
-    }
-
-    #[inline(always)]
-    fn trace(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.trace(f)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,31 +253,27 @@ mod tests {
         let mut i = Input::new("this\nis\nペン");
         let beginning = i.checkpoint();
 
-        assert_eq!(
-            true,
-            i.is_start_of_line(),
-            "beginning must be also start of line"
-        );
+        assert!(i.is_start_of_line(), "beginning must be also start of line");
 
         i.next_token();
-        assert_eq!(false, i.is_start_of_line(), "middle of line");
+        assert!(!i.is_start_of_line(), "middle of line");
 
         i.next_slice(3);
-        assert_eq!(false, i.is_start_of_line(), "right at line break");
+        assert!(!i.is_start_of_line(), "right at line break");
 
         i.next_slice(1);
-        assert_eq!(true, i.is_start_of_line(), "beginning of 2nd line");
+        assert!(i.is_start_of_line(), "beginning of 2nd line");
 
         i.next_token();
-        assert_eq!(false, i.is_start_of_line(), "middle of line");
+        assert!(!i.is_start_of_line(), "middle of line");
 
         i.reset(&beginning);
-        assert_eq!(true, i.is_start_of_line(), "back to beginning");
+        assert!(i.is_start_of_line(), "back to beginning");
 
         i.next_slice(8);
-        assert_eq!(true, i.is_start_of_line(), "3rd line");
+        assert!(i.is_start_of_line(), "3rd line");
 
         i.next_token();
-        assert_eq!(false, i.is_start_of_line(), "middle of line");
+        assert!(!i.is_start_of_line(), "middle of line");
     }
 }

@@ -11,15 +11,8 @@ use winnow::{
     Parser,
 };
 
-use crate::value::Scalar;
-
 use super::{
-    context::{self, FlowOrKey},
-    double,
-    error::ParserError,
-    input::InputStream,
-    single,
-    spaces::IndentLevel,
+    context::FlowOrKey, error::ParserError, input::InputStream, single, spaces::IndentLevel,
 };
 
 /// Single quoted text.
@@ -35,9 +28,12 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    delimited(
-        one_of('\''),
-        single::non_break_single_text(context, indent_level),
-        one_of('\''),
+    trace(
+        "scalar::single_quoted",
+        delimited(
+            one_of('\''),
+            single::non_break_single_text(context, indent_level),
+            one_of('\''),
+        ),
     )
 }

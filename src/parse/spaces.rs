@@ -156,7 +156,7 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    Context::separate(indent_level)
+    trace("spaces::separate", Context::separate(indent_level))
 }
 
 /// Parses separate lines.

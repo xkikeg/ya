@@ -25,7 +25,7 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "flow::flow_pair",
+        "flow::pair::flow_pair",
         alt((
             preceded(
                 ('?', spaces::separate(context, indent_level)),
@@ -50,7 +50,7 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "flow::flow_pair_entry",
+        "flow::pair::flow_pair_entry",
         alt((
             flow_pair_yaml_key_entry(context, indent_level),
             flow::map::flow_map_empty_key_entry(context, indent_level),
@@ -73,7 +73,7 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "flow::flow_pair_yaml_key_entry",
+        "flow::pair::flow_pair_yaml_key_entry",
         (
             key::implicit_yaml_key(FlowKey),
             flow::map::flow_map_separate_value(context, indent_level),
@@ -96,7 +96,7 @@ where
     Error: ParserError<Input>,
 {
     trace(
-        "flow::flow_pair_json_key_entry",
+        "flow::pair::flow_pair_json_key_entry",
         (
             key::implicit_json_key(FlowKey),
             flow::map::flow_map_adjacent_value(context, indent_level),
