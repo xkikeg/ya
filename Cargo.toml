@@ -9,10 +9,15 @@ description = "Yet Another YAML parser in pure Rust"
 
 [dependencies]
 winnow = { version = "1.0", features = ["simd"] }
+serde = { version = "1.0", optional = true }
+
+[features]
+serde = ["dep:serde"]
 
 [dev-dependencies]
 criterion = "0.8.2"
 rstest = "0.26.1"
+serde = { version = "1.0", features = ["derive"] }
 
 [[bench]]
 name = "benchmark"

@@ -13,6 +13,14 @@ env:
 jobs:
   clippy:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: default
+            flag: ""
+          - name: all-features
+            flag: "--all-features"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -21,4 +29,6 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+        with:
+          key: ${{ matrix.features.name }}
+      - run: cargo clippy --all-targets ${{ matrix.features.flag }} -- -D warnings

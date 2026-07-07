@@ -123,7 +123,7 @@ impl<'i> Node<'i> {
 
 /// Parses a Core Schema int lexeme (`[-+]?[0-9]+`, `0o[0-7]+`, or `0x[0-9a-fA-F]+`) already known
 /// to match [`crate::resolve`]'s classifier. `None` on `i64` overflow.
-fn parse_core_int(text: &str) -> Option<i64> {
+pub(crate) fn parse_core_int(text: &str) -> Option<i64> {
     let (sign, rest): (i64, &str) = match text.strip_prefix('-') {
         Some(r) => (-1, r),
         None => (1, text.strip_prefix('+').unwrap_or(text)),
@@ -138,10 +138,24 @@ fn parse_core_int(text: &str) -> Option<i64> {
     magnitude.checked_mul(sign)
 }
 
+/// Like [`parse_core_int`], but for magnitudes that fit `u64` but not `i64` (a positive int lexeme
+/// with no `-`/`+` sign wider than `i64::MAX`). Used by the `serde` Deserializer (`crate::de`) as
+/// a fallback for `deserialize_any`/`visit_u64` when [`parse_core_int`] overflows.
+#[cfg(feature = "serde")]
+pub(crate) fn parse_core_uint(text: &str) -> Option<u64> {
+    if let Some(hex) = text.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()
+    } else if let Some(oct) = text.strip_prefix("0o") {
+        u64::from_str_radix(oct, 8).ok()
+    } else {
+        text.parse::<u64>().ok()
+    }
+}
+
 /// Parses a Core Schema float lexeme already known to match [`crate::resolve`]'s classifier:
 /// `.inf`/`.Inf`/`.INF` (optionally signed), `.nan`/`.NaN`/`.NAN`, or an ordinary decimal float
 /// that [`str::parse`] already understands.
-fn parse_core_float(text: &str) -> Option<f64> {
+pub(crate) fn parse_core_float(text: &str) -> Option<f64> {
     if matches!(text, ".nan" | ".NaN" | ".NAN") {
         return Some(f64::NAN);
     }

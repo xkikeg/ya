@@ -1,6 +1,11 @@
+#[cfg(feature = "serde")]
+pub mod de;
 pub mod parse;
 pub mod resolve;
 pub mod value;
+
+#[cfg(feature = "serde")]
+pub use de::from_str;
 
 use winnow::{error::ContextError, Parser as _};
 
@@ -38,6 +43,12 @@ pub enum Error<'i> {
     /// The input parsed, but violates Core Schema tag resolution (e.g. an explicit `!!int` tag on
     /// text that isn't a valid integer).
     Resolve(resolve::ResolveError),
+    /// A [`serde::Deserialize`] impl rejected the shape or content of an otherwise-valid node
+    /// (e.g. a required struct field is missing, or a custom `Deserialize` impl's own validation
+    /// failed). Only constructible via [`serde::de::Error::custom`], and only when the `serde`
+    /// feature is enabled -- see [`de`].
+    #[cfg(feature = "serde")]
+    Custom(String),
 }
 
 impl std::fmt::Display for Error<'_> {
@@ -45,6 +56,8 @@ impl std::fmt::Display for Error<'_> {
         match self {
             Error::Parse(err) => write!(f, "{err}"),
             Error::Resolve(err) => write!(f, "{err}"),
+            #[cfg(feature = "serde")]
+            Error::Custom(msg) => write!(f, "{msg}"),
         }
     }
 }
