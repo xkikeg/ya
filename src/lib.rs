@@ -1,3 +1,26 @@
+//! `ya` ("yet another YAML parser") is a pure-Rust implementation of the
+//! [YAML 1.2.2 specification](https://yaml.org/spec/1.2.2/), built on the
+//! [`winnow`](https://docs.rs/winnow) parser-combinator crate.
+//!
+//! It is implemented **as naive as possible, on purpose**: every production rule in the spec
+//! grammar has a corresponding, identically-named, identically-composed Rust parser function
+//! rather than a fused or hand-optimized rewrite. Consistency with the specification -- not
+//! performance, not idiomatic-Rust cleverness -- is the priority. See
+//! [`AGENT.md`](https://github.com/xkikeg/ya/blob/main/AGENT.md) for the full design rationale.
+//!
+//! [`parse`] is the top-level entry point for representation-level parsing plus Core Schema tag
+//! resolution; [`from_str`] (behind the optional `serde` feature) deserializes directly into a
+//! caller-supplied type.
+//!
+//! ```
+//! let stream = ya::parse("key: value\n").unwrap();
+//! let doc = stream.documents()[0].as_node();
+//! let ya::value::Content::Map(map) = &doc.value else {
+//!     panic!("expected a mapping");
+//! };
+//! assert_eq!(map.entries()[0].value.as_str(), Some("value"));
+//! ```
+
 #[cfg(feature = "serde")]
 pub mod de;
 pub mod parse;
