@@ -3,10 +3,19 @@
 //! accessors on demand ... and on top of those the Phase 8 serde `Deserialize` layer -- both parse
 //! the retained lexeme against the caller's requested type at conversion time").
 //!
-//! [`NodeDeserializer`] implements [`serde::Deserializer`] directly over an owned [`Node`],
-//! consuming it so that borrowed scalar text (`Cow::Borrowed`) reaches the visitor zero-copy via
-//! `visit_borrowed_str`, exactly like the parser's own `Cow`-borrowing discipline. [`from_str`] is
-//! the intended entry point, mirroring `serde_json`/`serde_yaml`'s own `from_str`.
+//! There are two deserializer types, mirroring `serde_json`'s split:
+//!
+//! * [`Deserializer`] is built from the format's own input ([`Deserializer::from_str`]) and is the
+//!   type serde's [conventions](https://serde.rs/conventions.html) call for. It deserializes a
+//!   single-document stream directly, and yields one value per document via
+//!   [`into_iter`](Deserializer::into_iter) for a multi-document one.
+//! * [`NodeDeserializer`] works one [`Node`] at a time, for callers who already hold a parsed node
+//!   (also reachable as [`Node::into_deserializer`](serde::de::IntoDeserializer::into_deserializer)).
+//!   It consumes its node, so borrowed scalar text (`Cow::Borrowed`) reaches the visitor zero-copy
+//!   via `visit_borrowed_str`, exactly like the parser's own `Cow`-borrowing discipline.
+//!
+//! [`from_str`] and [`from_bytes`] are the one-shot entry points, mirroring
+//! `serde_json`/`serde_yaml`'s own.
 //!
 //! Only `Deserialize` is implemented, not `Serialize`: the tag-only resolution model (AGENT.md
 //! Phase 6) makes a `Node -> T` conversion a natural, lossy-by-design projection (an `!!int`'s
@@ -15,6 +24,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::marker::PhantomData;
 
 use serde::de::{
     self, Deserialize, DeserializeSeed, EnumAccess, Error as _, IntoDeserializer, MapAccess,
@@ -22,17 +32,15 @@ use serde::de::{
 };
 
 use crate::value::{parse_core_float, parse_core_int, parse_core_uint};
-use crate::value::{Content, MapEntry, Mapping, Node, Scalar, StandardTag, Tag};
+use crate::value::{Content, Document, MapEntry, Mapping, Node, Scalar, StandardTag, Stream, Tag};
 use crate::Error;
 
 /// Deserializes `input` as YAML into `T`.
 ///
-/// Composes [`crate::parse`] (representation parsing + Core Schema resolution) with
-/// [`NodeDeserializer`]. An empty stream (`input` containing zero documents, e.g. `""` or a
-/// comment-only file) deserializes as an implicit null node, matching the Core Schema's own
-/// treatment of an empty document (AGENT.md Phase 6's resolution table). A stream with more than
-/// one document is rejected -- use [`crate::parse`] directly and deserialize each of
-/// [`crate::value::Stream::documents`] individually if multiple documents are expected.
+/// An empty stream (`input` containing zero documents, e.g. `""` or a comment-only file)
+/// deserializes as an implicit null node, matching the Core Schema's own treatment of an empty
+/// document (AGENT.md Phase 6's resolution table). A stream with more than one document is
+/// rejected -- use [`Deserializer::into_iter`] for those.
 ///
 /// ```
 /// #[derive(serde::Deserialize, Debug, PartialEq)]
@@ -44,27 +52,181 @@ use crate::Error;
 /// let point: Point = ya::de::from_str("x: 1\ny: 2\n").unwrap();
 /// assert_eq!(point, Point { x: 1, y: 2 });
 /// ```
-pub fn from_str<'de, T>(input: &'de str) -> Result<T, Error<'de>>
+pub fn from_str<'de, T>(input: &'de str) -> crate::Result<T>
 where
     T: Deserialize<'de>,
 {
-    let stream = crate::parse(input)?;
-    let mut documents = stream.0.into_iter();
-    let node = match documents.next() {
-        None => Node::new(Content::Empty, Tag::Standard(StandardTag::Null)),
-        Some(doc) => doc.into_node(),
-    };
-    if documents.next().is_some() {
-        return Err(Error::custom(
-            "expected a single YAML document, found more than one",
-        ));
-    }
-    T::deserialize(NodeDeserializer::new(node))
+    T::deserialize(Deserializer::from_str(input)?)
 }
 
-impl<'i> de::Error for Error<'i> {
+/// Deserializes `input` as UTF-8 encoded YAML into `T`.
+///
+/// Equivalent to [`from_str`] after a UTF-8 check; invalid UTF-8 becomes [`Error::Utf8`]. There is
+/// deliberately no `from_reader`: it would need to own a buffer, which defeats this crate's
+/// `Cow::Borrowed` zero-copy discipline and would force `T: DeserializeOwned`. Read to a `String`
+/// and call [`from_str`] instead.
+///
+/// ```
+/// let bytes: &[u8] = b"- 1\n- 2\n";
+/// assert_eq!(ya::de::from_bytes::<Vec<i64>>(bytes).unwrap(), vec![1, 2]);
+/// ```
+pub fn from_bytes<'de, T>(input: &'de [u8]) -> crate::Result<T>
+where
+    T: Deserialize<'de>,
+{
+    from_str(std::str::from_utf8(input).map_err(Error::Utf8)?)
+}
+
+impl de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Error::Custom(msg.to_string())
+    }
+}
+
+/// A [`serde::Deserializer`] over a whole YAML input.
+///
+/// Deserializing this directly expects a single-document stream (an empty one counts as null);
+/// [`into_iter`](Self::into_iter) handles a `---`-separated multi-document stream instead.
+///
+/// ```
+/// #[derive(serde::Deserialize, Debug, PartialEq)]
+/// struct Point {
+///     x: i64,
+///     y: i64,
+/// }
+///
+/// let points: Vec<Point> = ya::Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
+///     .unwrap()
+///     .into_iter()
+///     .collect::<Result<_, _>>()
+///     .unwrap();
+/// assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
+/// ```
+pub struct Deserializer<'de> {
+    stream: Stream<'de>,
+}
+
+impl<'de> Deserializer<'de> {
+    /// Parses `input` (representation parsing + Core Schema resolution, i.e. [`crate::parse`])
+    /// into a deserializer over the resulting stream.
+    // Not `std::str::FromStr`: that trait can't borrow from its input, which is the entire point
+    // of this type. Named `from_str` to match `serde_json::Deserializer::from_str`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(input: &'de str) -> crate::Result<Self> {
+        Ok(Self {
+            stream: crate::parse(input)?,
+        })
+    }
+
+    /// Like [`from_str`](Self::from_str), for UTF-8 encoded input.
+    pub fn from_bytes(input: &'de [u8]) -> crate::Result<Self> {
+        Self::from_str(std::str::from_utf8(input).map_err(Error::Utf8)?)
+    }
+
+    /// Turns this into an iterator yielding one `T` per document in the stream.
+    ///
+    /// Unlike `serde_json::StreamDeserializer` -- which must stream, since JSON has no document
+    /// separator -- [`crate::parse`] has already materialized every document by this point, so
+    /// this iterates over parsed documents rather than parsing lazily. The API shape matches;
+    /// the laziness doesn't.
+    // Not `IntoIterator`: the element type is chosen by the caller (`into_iter::<T>()`), which a
+    // trait impl can't express. Same signature as `serde_json::Deserializer::into_iter`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter<T>(self) -> StreamDeserializer<'de, T>
+    where
+        T: Deserialize<'de>,
+    {
+        StreamDeserializer {
+            documents: self.stream.into_documents().into_iter(),
+            marker: PhantomData,
+        }
+    }
+
+    /// Reduces the stream to the single node to deserialize, per [`from_str`]'s documented rules.
+    fn into_single(self) -> crate::Result<NodeDeserializer<'de>> {
+        let mut documents = self.stream.into_documents().into_iter();
+        let node = match documents.next() {
+            None => Node::new(Content::Empty, Tag::Standard(StandardTag::Null)),
+            Some(doc) => doc.into_node(),
+        };
+        if documents.next().is_some() {
+            return Err(Error::custom(
+                "expected a single YAML document, found more than one; use `Deserializer::into_iter` for a multi-document stream",
+            ));
+        }
+        Ok(NodeDeserializer::new(node))
+    }
+}
+
+impl<'de> de::Deserializer<'de> for Deserializer<'de> {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        de::Deserializer::deserialize_any(self.into_single()?, visitor)
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        de::Deserializer::deserialize_option(self.into_single()?, visitor)
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        de::Deserializer::deserialize_enum(self.into_single()?, name, variants, visitor)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct identifier ignored_any
+    }
+}
+
+/// An iterator over the documents of a [`Deserializer`], deserializing each into a `T`.
+///
+/// Created by [`Deserializer::into_iter`]; see there for how this differs from
+/// `serde_json::StreamDeserializer`.
+pub struct StreamDeserializer<'de, T> {
+    documents: std::vec::IntoIter<Document<'de>>,
+    marker: PhantomData<T>,
+}
+
+impl<'de, T> Iterator for StreamDeserializer<'de, T>
+where
+    T: Deserialize<'de>,
+{
+    type Item = crate::Result<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.documents
+            .next()
+            .map(|doc| T::deserialize(NodeDeserializer::new(doc.into_node())))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.documents.len();
+        (remaining, Some(remaining))
+    }
+}
+
+impl<'de, T> ExactSizeIterator for StreamDeserializer<'de, T>
+where
+    T: Deserialize<'de>,
+{
+    fn len(&self) -> usize {
+        self.documents.len()
     }
 }
 
@@ -81,8 +243,18 @@ impl<'de> NodeDeserializer<'de> {
     }
 }
 
+/// Lets a [`Node`] be used wherever serde asks for a deserializer, the way `serde_json::Value`
+/// can: `node.into_deserializer()` instead of `NodeDeserializer::new(node)`.
+impl<'de> IntoDeserializer<'de, Error> for Node<'de> {
+    type Deserializer = NodeDeserializer<'de>;
+
+    fn into_deserializer(self) -> Self::Deserializer {
+        NodeDeserializer::new(self)
+    }
+}
+
 impl<'de> de::Deserializer<'de> for NodeDeserializer<'de> {
-    type Error = Error<'de>;
+    type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
@@ -218,7 +390,7 @@ fn scalar_cow(scalar: Scalar<'_>) -> Cow<'_, str> {
     }
 }
 
-fn visit_scalar_str<'de, V>(scalar: Scalar<'de>, visitor: V) -> Result<V::Value, Error<'de>>
+fn visit_scalar_str<'de, V>(scalar: Scalar<'de>, visitor: V) -> Result<V::Value, Error>
 where
     V: Visitor<'de>,
 {
@@ -235,7 +407,7 @@ struct EnumDeserializer<'de> {
 }
 
 impl<'de> EnumAccess<'de> for EnumDeserializer<'de> {
-    type Error = Error<'de>;
+    type Error = Error;
     type Variant = VariantDeserializer<'de>;
 
     fn variant_seed<S>(self, seed: S) -> Result<(S::Value, Self::Variant), Self::Error>
@@ -252,7 +424,7 @@ struct VariantDeserializer<'de> {
 }
 
 impl<'de> VariantAccess<'de> for VariantDeserializer<'de> {
-    type Error = Error<'de>;
+    type Error = Error;
 
     fn unit_variant(self) -> Result<(), Self::Error> {
         match self.value.value {
@@ -304,7 +476,7 @@ impl<'de> SeqDeserializer<'de> {
 }
 
 impl<'de> SeqAccess<'de> for SeqDeserializer<'de> {
-    type Error = Error<'de>;
+    type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
@@ -337,7 +509,7 @@ impl<'de> MapDeserializer<'de> {
 }
 
 impl<'de> MapAccess<'de> for MapDeserializer<'de> {
-    type Error = Error<'de>;
+    type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
     where
@@ -416,15 +588,63 @@ mod tests {
 
     #[test]
     fn multi_document_stream_deserializes_one_document_at_a_time() {
-        // The escape hatch `from_str`'s own error points at: `from_str` rejects a stream of more
-        // than one document, so a multi-document caller drives `NodeDeserializer` itself.
-        let stream = crate::parse("x: 1\ny: 2\n---\nx: 3\ny: 4\n").unwrap();
-        let points: Vec<Point> = stream
-            .into_documents()
+        // The escape hatch `from_str`'s own error points at: one `T` per document, no manual
+        // `NodeDeserializer` loop needed.
+        let points: Vec<Point> = Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
+            .unwrap()
             .into_iter()
-            .map(|doc| Point::deserialize(NodeDeserializer::new(doc.into_node())).unwrap())
-            .collect();
+            .collect::<crate::Result<_>>()
+            .unwrap();
         assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
+    }
+
+    #[test]
+    fn stream_deserializer_reports_its_document_count() {
+        let stream = Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
+            .unwrap()
+            .into_iter::<Point>();
+        assert_eq!(stream.len(), 2);
+        // An empty stream has no documents at all -- unlike `from_str`, which reads one absent
+        // document as null.
+        assert_eq!(
+            Deserializer::from_str("")
+                .unwrap()
+                .into_iter::<Point>()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn stream_deserializer_surfaces_per_document_errors() {
+        let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\nnope\n")
+            .unwrap()
+            .into_iter::<Point>();
+        assert_eq!(stream.next().unwrap().unwrap(), Point { x: 1, y: 2 });
+        assert!(matches!(stream.next().unwrap(), Err(Error::Custom(_))));
+        assert!(stream.next().is_none());
+    }
+
+    #[test]
+    fn deserializes_a_node_via_into_deserializer() {
+        let stream = crate::parse("x: 1\ny: 2\n").unwrap();
+        let node = stream.into_documents().pop().unwrap().into_node();
+        assert_eq!(
+            Point::deserialize(node.into_deserializer()).unwrap(),
+            Point { x: 1, y: 2 }
+        );
+    }
+
+    #[test]
+    fn deserializes_from_bytes() {
+        assert_eq!(
+            from_bytes::<Point>(b"x: 1\ny: 2\n").unwrap(),
+            Point { x: 1, y: 2 }
+        );
+        assert!(matches!(
+            from_bytes::<Point>(&[0xff, 0xfe]).unwrap_err(),
+            Error::Utf8(_)
+        ));
     }
 
     #[test]

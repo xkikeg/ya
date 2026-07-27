@@ -1074,7 +1074,9 @@ now runs unskipped.
       `winnow::error::ParseError<parse::input::Input<'i>, ContextError>` (boxed per
       `clippy::result_large_err`: `Input` carries the whole anchor-store/tag-handles parse state,
       making the unboxed variant far larger than `resolve::ResolveError`) or a
-      `resolve::ResolveError`, with `Display`/`std::error::Error` impls. Required one small
+      `resolve::ResolveError`, with `Display`/`std::error::Error` impls. **(Superseded by the
+      serde-conventions item below: `Error` no longer has a lifetime or a boxed winnow error, and
+      lives in `src/error.rs`.)** Required one small
       supporting fix: `parse::input::Input` didn't implement winnow's `AsBStr` (needed for
       `ParseError`'s own `Display` impl bound), even though its inner
       `Stateful<LocatingSlice<&str>, _>` already does -- added a one-line forwarding impl in
@@ -1096,7 +1098,9 @@ now runs unskipped.
       composing `crate::parse` with it; an empty stream (zero documents) deserializes as an
       implicit null, matching the Core Schema's own empty-document handling, and a stream with
       more than one document is rejected (deserialize `Stream::documents()` individually for that
-      case). `deserialize_any` dispatches on `(tag, content)`: `Content::Empty`/seq/map are
+      case -- **superseded**: the conventions item below adds `Deserializer::into_iter` for
+      exactly this, and drops the `'_` from `from_str`'s error). `deserialize_any` dispatches on
+      `(tag, content)`: `Content::Empty`/seq/map are
       tag-independent; a scalar's `Tag::Standard(Null/Bool/Int/Float)` gets a native
       `visit_unit`/`visit_bool`/`visit_i64`-or-`visit_u64`/`visit_f64` (a new
       `value::parse_core_uint` complements the existing `parse_core_int`/`parse_core_float`, for
@@ -1128,6 +1132,65 @@ now runs unskipped.
       `cargo clippy --all-targets --all-features -- -D warnings` all clean; `cargo build`/
       `cargo clippy --all-targets` (no features) confirmed unaffected, so the feature genuinely
       costs nothing when not enabled.
+- [x] **Conformance with [serde's data format conventions](https://serde.rs/conventions.html)**
+      (audited after the two items above landed; four divergences found, all fixed, released as
+      0.4.0 since the first is breaking).
+      1. **`Error` was lifetime-bearing, and is now `'static`.** `Error<'i>::Parse` stored the
+         winnow `ParseError`, which stores the `Input`, which borrows the source -- so the error
+         could never outlive the `&str` it came from, ruling out `?` into `anyhow`/`Box<dyn
+         Error + 'static>`/`thiserror` `#[from]` from any function that owns its input string
+         (`let s = read_to_string(..)?; ya::from_str(&s)?` did not compile). Per maintainer
+         direction the two forms are both kept rather than flattening to one: new `src/error.rs`
+         holds `ParseError<'i>` (thin wrapper over the winnow error, exposing `inner()` for
+         callers who want the `ContextError`/`Input` themselves, reachable by driving
+         `parse::yaml_stream` directly and `.into()`-ing the result) and `OwnedParseError`
+         (message + offset + line/column + the offending line, all owned). `Error` carries the
+         owned one -- it's what every caller propagates -- and both render identically through a
+         shared `render()`/`locate()` pair, so `into_owned()` loses nothing. Boxing is gone with
+         the lifetime, and `Error` picked up `Clone`/`PartialEq` (impossible before) plus
+         `#[non_exhaustive]`: `Error::Custom` is `#[cfg(feature = "serde")]`, so without it a
+         downstream exhaustive `match` broke merely because some *other* crate in the graph
+         enabled the feature -- i.e. the feature wasn't actually additive. **Deliberately no
+         `source()`** despite the plan calling for one: every variant's `Display` already contains
+         the full underlying message, so returning a source too would print it twice in
+         `anyhow`'s "Caused by:" chain (same call `serde_json::Error` makes). Supporting
+         addition: `parse::input::Input::original()`, to render against the whole source no
+         matter how far parsing advanced.
+      2. **No `Result` typedef** -- added `ya::Result<T>`. Note it deliberately isn't imported
+         inside `de.rs`: a one-parameter alias in scope would shadow the prelude's `Result` and
+         break every `Result<V::Value, Self::Error>` in the serde trait impls, so `de.rs` spells
+         it `crate::Result<T>` at the few free-function signatures that use it.
+      3. **No input-constructed `Deserializer`** -- the conventions' "a `Deserializer` type" means
+         one built from the format's own input, which `NodeDeserializer` (a `Node`, not a `&str`)
+         isn't. Added `de::Deserializer<'de>` with `from_str`/`from_bytes`, implementing
+         `serde::Deserializer` for the single-document case. This closed the multi-document gap at
+         the same time: `Deserializer::into_iter::<T>()` yields `de::StreamDeserializer`, one `T`
+         per document, replacing the hand-rolled `NodeDeserializer` loop `from_str`'s error used
+         to point people at. **Not lazy, unlike `serde_json::StreamDeserializer`** (which must
+         stream, JSON having no document separator): `crate::parse` has materialized every
+         document by then, so this iterates parsed documents -- the API shape matches, the
+         laziness doesn't, and the type's docs say so rather than over-promising. Both `from_str`
+         and `into_iter` carry `#[allow(clippy::should_implement_trait)]`: neither can be the
+         corresponding std trait (`FromStr` can't borrow from its input, `IntoIterator` can't let
+         the caller pick the element type), and both names match `serde_json`'s.
+      4. **`from_str` only** -- added `de::from_bytes` (the conventions page's own name; `from_slice`
+         is a serde_json-ism), UTF-8 failures surfacing as the new `Error::Utf8`. Deliberately no
+         `from_reader`: it needs an owned buffer, defeating the crate's `Cow::Borrowed` zero-copy
+         discipline and forcing `DeserializeOwned`.
+      Also: root re-exports for `Deserializer`/`NodeDeserializer`/`StreamDeserializer`/`from_bytes`
+      (conventions ask for the primary types at the root; only `from_str` was),
+      `impl IntoDeserializer for value::Node` (the `serde_json::Value` affordance), and
+      `[package.metadata.docs.rs] all-features` + `doc(cfg(..))` labels so the gated API shows up
+      on docs.rs. Not added: `Serialize`/`ser`/`to_string`, still a documented non-goal (`de.rs`'s
+      module docs) since the tag-only value model has no presentation layer to serialize back into.
+      Tests: `error.rs`'s own `locate`/render unit tests, `lib.rs`'s `error_outlives_the_parsed_input`
+      (the `Box<dyn Error + 'static>` case that didn't compile before) and
+      `syntax_error_reports_its_position` (which also documents that winnow reports the *top-level*
+      failure offset -- 0 for a bad first document -- not the exact offending character), and
+      `de.rs`'s stream-deserializer/`into_deserializer`/`from_bytes` cases. `cargo test
+      --all-features` (403 integration + 7 doctests), `cargo clippy --all-targets --all-features
+      -- -D warnings` and `cargo clippy --all-targets` (no features) all clean; conformance
+      unchanged at 402/402.
 
 ### Open design questions (escalate to the maintainer)
 
