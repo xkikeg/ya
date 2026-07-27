@@ -6,7 +6,9 @@ pub mod block;
 pub mod chars;
 pub mod context;
 mod directive;
-mod document;
+// Crate-visible rather than private: `crate::documents`' lazy iterator drives this module's
+// `stream_head`/`stream_step` directly, instead of the whole-stream `yaml_stream` parser.
+pub(crate) mod document;
 mod double;
 pub mod error;
 pub mod flow;
@@ -22,4 +24,4 @@ mod tag_handles;
 #[cfg(test)]
 pub mod testing;
 
-pub use document::yaml_stream;
+pub use document::{yaml_document, yaml_stream};

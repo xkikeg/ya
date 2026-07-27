@@ -34,11 +34,19 @@ Consequences of this design for how you should work here:
 
 ```
 src/
-  lib.rs             re-exports `parse`, `resolve`, and `value`
+  lib.rs             re-exports `parse`, `resolve`, `value`, the error types and the two
+                        top-level entry points (`parse_document` / `parse_stream`)
   value.rs            output data model (Stream, Document, Node, Content, Scalar, Mapping, Tag)
                         + Construct-phase accessors (Node::is_null/as_bool/as_str/as_i64/as_f64)
-  resolve.rs          Core Schema tag resolution post-pass (`resolve(Stream) -> Result<Stream, _>`)
-  parse.rs            module root, re-exports `yaml_stream` as the public entry point
+  error.rs            `Error` / `Result` / `ParseError<'i>` / `OwnedParseError`
+  documents.rs        lazy, document-at-a-time parsing: `Documents` iterator + `parse_stream` /
+                        `parse_document`, driving `parse::document`'s stream_head/stream_step
+  de.rs (serde only)  `Deserialize` support: `from_str`/`from_bytes`, `Deserializer`,
+                        `StreamDeserializer` (lazy, over `Documents`), `NodeDeserializer`
+  resolve.rs          Core Schema tag resolution post-pass (`resolve(Stream) -> Result<Stream, _>`,
+                        `resolve_document(Document) -> Result<Document, _>`)
+  parse.rs            module root, re-exports `yaml_stream`/`yaml_document` as the parser entry
+                        points
   parse/
     error.rs          ParserError trait alias (winnow error bounds used throughout)
     input.rs           InputStream trait alias + `Input` (LocatingSlice + Stateful<AnchorStore>)
@@ -60,7 +68,9 @@ src/
     directive.rs        Chapter 6.8: %YAML / %TAG / reserved directives
     document.rs         Chapter 9: l-yaml-stream, l-any-document, l-bare-document,
                         l-explicit-document, l-directive-document, document prefix/suffix;
-                        public `yaml_stream()` entry point + its tests
+                        public `yaml_stream()`/`yaml_document()` entry points + its tests;
+                        `stream_head`/`stream_step` (one loop iteration of l-yaml-stream, shared
+                        by `yaml_stream` and by `crate::documents`' lazy iterator)
     flow/
       content.rs         ns-flow-content / ns-flow-yaml-content / ns-flow-json-content
       node.rs             ns-flow-node / ns-flow-yaml-node / ns-flow-json-node
@@ -1064,7 +1074,9 @@ now runs unskipped.
       nit (the existing `alt` is already correct), not a functional gap, and reworking it carries
       its own small risk of a subtle regression for zero behavior change -- not worth blocking the
       rest of Phase 8 on.
-- [x] **Public API ergonomics**: top-level `ya::parse(&str) -> Result<value::Stream<'_>,
+- [x] **Public API ergonomics** *(`ya::parse` itself superseded by Phase 9's `parse_document` /
+      `parse_stream`; the error-type work below still stands)*: top-level
+      `ya::parse(&str) -> Result<value::Stream<'_>,
       Error<'_>>` (`src/lib.rs`), composing `parse::yaml_stream::<_, ContextError>` +
       `resolve::resolve` -- the two steps every caller needs -- so callers no longer have to reach
       into `parse::yaml_stream` + `parse::input::Input` + pick a winnow `Error` type themselves
@@ -1191,6 +1203,76 @@ now runs unskipped.
       --all-features` (403 integration + 7 doctests), `cargo clippy --all-targets --all-features
       -- -D warnings` and `cargo clippy --all-targets` (no features) all clean; conformance
       unchanged at 402/402.
+
+### Phase 9 -- Lazy document streaming ([issue #38](https://github.com/xkikeg/ya/issues/38)) -- DONE
+
+Motivation: `de::StreamDeserializer` advertised `serde_json`'s
+`Deserializer::from_str(..).into_iter::<T>()` shape but called `crate::parse` first, so every
+document was already in a `Vec` before the iterator handed out its first item (its own doc comment
+said as much). Parsing a document at a time bounds peak memory by the largest single document and
+surfaces a first-document syntax error without parsing the rest.
+
+- [x] **9a. `parse::yaml_stream` stays eager and unchanged** -- a deliberate deviation from the
+      issue's literal "make `parse::yaml_stream` lazy". It's a winnow `Parser` returning
+      `value::Stream`, and a `Parser` returns a *value*; it's also what
+      `tests/integration_tests.rs` drives for the whole corpus, and `l-yaml-stream` is by definition
+      "the sequence of all documents". Instead, its loop body was factored into two generic parser
+      functions -- `stream_head` (`l-document-prefix* l-any-document?`) and `stream_step` (one
+      iteration of the trailing `( ... | ... )*` group, returning a `StreamStep::Document/Skipped/End`)
+      -- plus `any_document_reset` (`reset_document_state` + `any_document`, previously written out
+      at three call sites). `yaml_stream` now loops over those two and collects; the lazy iterator
+      calls the same two. Zero duplicated grammar, and `document.rs` became `pub(crate) mod` so
+      `crate::documents` can reach the two `pub(crate)` steps.
+- [x] **9b. `parse::yaml_document`** (issue item 3): `document_prefix` + `any_document_reset`.
+      **Not a spec production** -- there is no grammar rule for "one document" -- so per the naming
+      convention it carries no `#[doc(alias)]` and no `#rule-...` link, and its doc comment says
+      explicitly that it's `l-yaml-stream` restricted to a single document.
+- [x] **9c. New `src/documents.rs`**: `Documents<'i>`, an `Iterator<Item = Result<Document<'i>>>`
+      over `parse::input::Input<'i>` with a three-state machine (Head/Body/Done) transliterating
+      `yaml_stream`'s control flow, plus `parse_stream` and `parse_document`. Each document is
+      resolved (9e) as it's yielded, so `Documents` produces exactly what the old eager `parse` did.
+      A *parse* failure ends the iteration (the stream position after one isn't meaningful); a
+      *resolve* failure doesn't (that document parsed fine, so later ones are still reachable).
+      `FusedIterator` either way.
+      **Finding: winnow's `ParseError::new` is `pub(crate)`**, so a hand-driven parse can't build a
+      `winnow::error::ParseError` and therefore can't build this crate's borrowed
+      `ParseError<'i>` either. It doesn't need to -- `Error::Parse` carries `OwnedParseError`, whose
+      fields this crate owns -- so `OwnedParseError::from_parts(input, offset, message)` was added
+      (`pub(crate)`), reusing the existing `locate` helper. Offsets come from
+      `original().len() - eof_offset()` rather than a new `Location` impl.
+      **Behavioural parity worth knowing**: today's `ya::parse("[a, b")` fails *not* inside
+      `yaml_stream` (which returns `Ok(vec![])` leaving the input unconsumed) but in winnow's
+      `Parser::parse`, on leftover input, at offset 0. `Documents::end_of_stream` reproduces that:
+      when a step reports `End` with input remaining, it yields one final `Err` at the position the
+      stream gave up. It deliberately carries an **empty message**, matching `Parser::parse`'s own
+      context-less `ContextError` -- the plan had called for a real message like "expected end of
+      stream", but that would be actively misleading (for `[a, b` the offset is the *start* of the
+      unterminated sequence, not the missing `]`), and the position + source line + caret was
+      already the whole diagnostic.
+- [x] **9d. Top-level API** (issue item 2): `ya::parse` removed, replaced by `ya::parse_document`
+      (returns `Result<Document>`; zero documents reads as an implicit null document per the Core
+      Schema, more than one is the new `Error::MultipleDocuments`) and `ya::parse_stream` (returns
+      `Documents` directly, no `Result` -- nothing is parsed yet). `single_document` in
+      `documents.rs` holds that one-document rule and is shared with `de`, which previously had its
+      own copy.
+- [x] **9e. `resolve::resolve_document`** (issue item 4): resolution was already per-document
+      internally, so this just promotes it to public API; `resolve(Stream)` now maps it.
+- [x] **9f. `de.rs`**: `Deserializer` holds `Documents` instead of `Stream`, so `from_str` returns
+      `Self` rather than `Result<Self>` (matching `serde_json::Deserializer::from_str`) and
+      `StreamDeserializer` wraps `Documents` directly -- genuinely lazy, and no longer an
+      `ExactSizeIterator` (a lazy iterator can't know how many documents follow), which took
+      `stream_deserializer_reports_its_document_count` with it.
+- [x] **9g. Tests**: `documents.rs`'s own module (single/empty/multi-document, syntax and resolve
+      errors, fuse-after-error, continue-after-resolve-error) plus the two that actually distinguish
+      lazy from eager -- `parse_stream_yields_a_document_before_parsing_a_later_broken_one` and its
+      `de.rs` counterpart through `Deserializer::into_iter`, both of which would produce *nothing*
+      under the old eager parse. `lib.rs`'s `syntax_error_reports_its_position` kept its exact
+      assertions (offset 0 / line 1 / column 1), retargeted at `parse_document` -- the parity check
+      for 9c. `tests/integration_tests.rs` and `benches/benchmark.rs` needed no changes at all,
+      since both drive `parse::yaml_stream`, which is unchanged. `cargo test --all-features`
+      (162 unit + 403 integration + 8 doctests), `cargo clippy --all-targets --all-features
+      -- -D warnings` and `cargo clippy --all-targets` (no features) all clean; conformance
+      unchanged at **402/402 (100.0%)** -- the real safety net for 9a's refactor.
 
 ### Open design questions (escalate to the maintainer)
 

@@ -37,9 +37,17 @@ pub fn resolve(stream: Stream<'_>) -> Result<Stream<'_>, ResolveError> {
     let documents = stream
         .0
         .into_iter()
-        .map(|doc| resolve_node(doc.into_node()).map(Document::new))
+        .map(resolve_document)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Stream(documents))
+}
+
+/// Resolves a single document's tags, per [`resolve`] -- which is exactly this, mapped over the
+/// stream's documents. Resolution never looks beyond the document it's given (a tag handle or an
+/// anchor is document-scoped), so this is the unit the lazy [`crate::Documents`] iterator resolves
+/// as it goes.
+pub fn resolve_document(document: Document<'_>) -> Result<Document<'_>, ResolveError> {
+    resolve_node(document.into_node()).map(Document::new)
 }
 
 /// A tag-resolution failure: an explicit standard tag was applied to content it can't legally

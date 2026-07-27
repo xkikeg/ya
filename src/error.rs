@@ -38,6 +38,10 @@ pub enum Error {
     /// The input parsed, but violates Core Schema tag resolution (e.g. an explicit `!!int` tag on
     /// text that isn't a valid integer).
     Resolve(ResolveError),
+    /// A single document was expected, but the input holds a `---`/`...`-separated stream of more
+    /// than one. Use [`crate::parse_stream`] for those (or, with the `serde` feature,
+    /// `Deserializer::into_iter`).
+    MultipleDocuments,
     /// The bytes handed to [`crate::de::from_bytes`] aren't valid UTF-8.
     #[cfg(feature = "serde")]
     Utf8(std::str::Utf8Error),
@@ -53,6 +57,10 @@ impl fmt::Display for Error {
         match self {
             Error::Parse(err) => write!(f, "{err}"),
             Error::Resolve(err) => write!(f, "{err}"),
+            Error::MultipleDocuments => write!(
+                f,
+                "expected a single YAML document, found a stream of more than one"
+            ),
             #[cfg(feature = "serde")]
             Error::Utf8(err) => write!(f, "{err}"),
             #[cfg(feature = "serde")]
@@ -180,6 +188,24 @@ pub struct OwnedParseError {
 }
 
 impl OwnedParseError {
+    /// Builds an error for `offset` within `input` directly, for a parse driven by hand rather than
+    /// by winnow's [`Parser::parse`](winnow::Parser::parse).
+    ///
+    /// The borrowed [`ParseError`] can't serve that case: it wraps a winnow
+    /// [`ParseError`](winnow::error::ParseError), whose only constructor is private to winnow, so
+    /// the only way to obtain one is to let `Parser::parse` build it. Nothing is lost -- this
+    /// records the same message/offset/location that [`ParseError::into_owned`] copies out.
+    pub(crate) fn from_parts(input: &str, offset: usize, message: String) -> Self {
+        let (line, column, line_text) = locate(input, offset);
+        Self {
+            message,
+            offset,
+            line,
+            column,
+            line_text: line_text.to_owned(),
+        }
+    }
+
     /// The parser's own message (winnow's [`ContextError`] rendering), without the source excerpt.
     /// May be empty when the failing parser attached no context.
     pub fn message(&self) -> &str {
