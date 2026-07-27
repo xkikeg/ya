@@ -111,18 +111,14 @@ impl<'i> Iterator for Documents<'i> {
                     self.state = State::Body;
                     match document::stream_head::<_, ContextError>(&mut self.input) {
                         Err(err) => return Some(Err(self.fail(&err))),
-                        Ok(Some(doc)) => {
-                            return Some(resolve_document(doc).map_err(Error::Resolve))
-                        }
+                        Ok(Some(doc)) => return Some(self.resolve(doc)),
                         // No document at the head of the stream; carry on into the body.
                         Ok(None) => {}
                     }
                 }
                 State::Body => match document::stream_step::<_, ContextError>(&mut self.input) {
                     Err(err) => return Some(Err(self.fail(&err))),
-                    Ok(StreamStep::Document(doc)) => {
-                        return Some(resolve_document(doc).map_err(Error::Resolve))
-                    }
+                    Ok(StreamStep::Document(doc)) => return Some(self.resolve(doc)),
                     // This iteration consumed a BOM/comment/`...` suffix but produced no document.
                     Ok(StreamStep::Skipped) => {}
                     Ok(StreamStep::End) => return self.end_of_stream().map(Err),
@@ -134,7 +130,19 @@ impl<'i> Iterator for Documents<'i> {
 
 impl std::iter::FusedIterator for Documents<'_> {}
 
-impl Documents<'_> {
+impl<'i> Documents<'i> {
+    /// The complete input being parsed, regardless of how far the iterator has advanced.
+    pub fn source(&self) -> &'i str {
+        self.input.original()
+    }
+
+    /// Resolves `document`'s tags, pointing any failure at the source it came from -- the node's
+    /// [`Span`](crate::value::Span) means nothing to a caller without the input to read it against,
+    /// and this iterator is holding that input.
+    fn resolve(&self, document: Document<'i>) -> crate::Result<Document<'i>> {
+        resolve_document(document).map_err(|err| Error::Resolve(err.located(self.source())))
+    }
+
     /// The current byte offset into the original input.
     ///
     /// `eof_offset` counts the *remaining* input, and this crate's stream is `&str`-backed, so its
@@ -162,11 +170,11 @@ impl Documents<'_> {
             self.state = State::Done;
             return None;
         }
-        // Deliberately no message: `Parser::parse`'s own trailing-input error carries a
-        // context-less `ContextError`, which renders as nothing, and the position + source line +
-        // caret that `OwnedParseError` prints are the whole diagnostic in both cases. Inventing a
-        // message here would only add a guess -- the offset is where the *stream* gave up, which
-        // for e.g. `[a, b` is the start of the unterminated sequence, not the missing `]`.
+        // No message of our own: `Parser::parse`'s trailing-input error carries a context-less
+        // `ContextError` too, and the rendered position is the whole diagnostic in both cases.
+        // Anything more specific would be a guess -- the offset is where the *stream* gave up,
+        // which for e.g. `[a, b` is the start of the unterminated sequence, not the missing `]`.
+        // An empty message renders as `crate::error`'s generic title rather than as nothing.
         Some(self.fail(&ContextError::new()))
     }
 }
@@ -256,6 +264,46 @@ mod tests {
         assert!(matches!(docs.next(), Some(Err(Error::Parse(_)))));
         assert!(docs.next().is_none());
         assert!(docs.next().is_none());
+    }
+
+    /// Spans are only worth having if they slice the right text back out, which no amount of
+    /// "the node has a span" checking would catch.
+    #[test]
+    fn every_node_spans_the_text_it_was_parsed_from() {
+        let input = "a: 1\nb: [2, 3]\n";
+        let doc = parse_document(input).unwrap();
+        let root = doc.as_node();
+        assert_eq!(root.span().unwrap().start(), 0);
+
+        let Content::Map(map) = &root.value else {
+            panic!("expected a mapping, got {:?}", root.value);
+        };
+        let text = |node: &Node<'_>| &input[node.span().unwrap().range()];
+
+        assert_eq!(text(&map.entries()[0].key), "a");
+        assert_eq!(text(&map.entries()[0].value), "1");
+        assert_eq!(text(&map.entries()[1].key), "b");
+        assert_eq!(text(&map.entries()[1].value), "[2, 3]");
+
+        let Content::Seq(items) = &map.entries()[1].value.value else {
+            panic!("expected a sequence");
+        };
+        assert_eq!(text(&items[0]), "2");
+        assert_eq!(text(&items[1]), "3");
+    }
+
+    /// An alias points at itself, not at the anchor it copies -- an error about *this* node should
+    /// name the line it was written on.
+    #[test]
+    fn an_alias_spans_the_alias_not_the_anchor() {
+        let input = "- &a foo\n- *a\n";
+        let doc = parse_document(input).unwrap();
+        let Content::Seq(items) = &doc.as_node().value else {
+            panic!("expected a sequence");
+        };
+        // A node's span covers its properties too, `c-ns-properties` being part of the node.
+        assert_eq!(&input[items[0].span().unwrap().range()], "&a foo");
+        assert_eq!(&input[items[1].span().unwrap().range()], "*a");
     }
 
     #[test]

@@ -32,8 +32,9 @@ use serde::de::{
 };
 
 use crate::documents::{single_document, Documents};
+use crate::error::Excerpt;
 use crate::value::{parse_core_float, parse_core_int, parse_core_uint};
-use crate::value::{Content, MapEntry, Mapping, Node, Scalar, StandardTag, Tag};
+use crate::value::{Content, MapEntry, Mapping, Node, Scalar, Span, StandardTag, Tag};
 use crate::Error;
 
 /// Deserializes `input` as YAML into `T`.
@@ -80,7 +81,45 @@ where
 
 impl de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error::Custom(msg.to_string())
+        Error::Custom {
+            message: msg.to_string(),
+            excerpt: None,
+        }
+    }
+}
+
+/// Where the node currently being deserialized came from, so an error raised against it can point
+/// at its source text.
+///
+/// serde's [`de::Error::custom`] is a free function with no access to any of this -- it's how every
+/// derived `Deserialize` reports a missing field or a type mismatch -- so the location is attached
+/// afterwards, by the deserializer that was running when the error came back.
+#[derive(Clone, Copy, Default)]
+struct Origin<'de> {
+    span: Option<Span>,
+    source: Option<&'de str>,
+}
+
+impl<'de> Origin<'de> {
+    /// Points `err` at this node, unless it already points at one.
+    ///
+    /// Only-if-missing, so the innermost deserializer still running when the error surfaced wins:
+    /// a bad `x` in `{x: nope}` points at `nope`, not at the whole mapping that contains it.
+    fn locate(self, err: Error) -> Error {
+        match (err, self.span, self.source) {
+            (
+                Error::Custom {
+                    message,
+                    excerpt: None,
+                },
+                Some(span),
+                Some(source),
+            ) => Error::Custom {
+                message,
+                excerpt: Some(Excerpt::new(source, span)),
+            },
+            (err, _, _) => err,
+        }
     }
 }
 
@@ -150,8 +189,10 @@ impl<'de> Deserializer<'de> {
 
     /// Reduces the stream to the single node to deserialize, per [`from_str`]'s documented rules.
     fn into_single(self) -> crate::Result<NodeDeserializer<'de>> {
-        Ok(NodeDeserializer::new(
+        let source = self.documents.source();
+        Ok(NodeDeserializer::with_source(
             single_document(self.documents)?.into_node(),
+            source,
         ))
     }
 }
@@ -210,9 +251,10 @@ where
     type Item = crate::Result<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let source = self.documents.source();
         self.documents
             .next()
-            .map(|doc| T::deserialize(NodeDeserializer::new(doc?.into_node())))
+            .map(|doc| T::deserialize(NodeDeserializer::with_source(doc?.into_node(), source)))
     }
 }
 
@@ -222,12 +264,35 @@ impl<'de, T> std::iter::FusedIterator for StreamDeserializer<'de, T> where T: De
 /// rather than borrows its node.
 pub struct NodeDeserializer<'de> {
     node: Node<'de>,
+    /// The input the node was parsed from, when known. Only needed to render an error against the
+    /// node's [`Span`]; deserializing itself never looks at it.
+    source: Option<&'de str>,
 }
 
 impl<'de> NodeDeserializer<'de> {
     /// Creates a new instance wrapping `node`.
+    ///
+    /// Errors from it carry no source excerpt: a `Node` knows the byte range it was parsed from,
+    /// but not the text. Use [`with_source`](Self::with_source) -- or go through
+    /// [`Deserializer`]/[`from_str`], which do -- for located errors.
     pub fn new(node: Node<'de>) -> Self {
-        Self { node }
+        Self { node, source: None }
+    }
+
+    /// Like [`new`](Self::new), but able to render errors against the input `node` was parsed
+    /// from.
+    pub fn with_source(node: Node<'de>, source: &'de str) -> Self {
+        Self {
+            node,
+            source: Some(source),
+        }
+    }
+
+    fn origin(&self) -> Origin<'de> {
+        Origin {
+            span: self.node.span(),
+            source: self.source,
+        }
     }
 }
 
@@ -248,11 +313,60 @@ impl<'de> de::Deserializer<'de> for NodeDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let Node { tag, value } = self.node;
+        let origin = self.origin();
+        self.deserialize_any_impl(visitor)
+            .map_err(|err| origin.locate(err))
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        let origin = self.origin();
+        let is_null = matches!(self.node.value, Content::Empty)
+            || self.node.tag == Tag::Standard(StandardTag::Null);
+        if is_null {
+            visitor.visit_none()
+        } else {
+            visitor.visit_some(self)
+        }
+        .map_err(|err| origin.locate(err))
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        let origin = self.origin();
+        self.deserialize_enum_impl(name, variants, visitor)
+            .map_err(|err| origin.locate(err))
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct identifier ignored_any
+    }
+}
+
+impl<'de> NodeDeserializer<'de> {
+    /// [`deserialize_any`](de::Deserializer::deserialize_any) proper; its caller only adds the
+    /// node's source location to whatever error comes back.
+    fn deserialize_any_impl<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        let source = self.source;
+        let Node { tag, value, .. } = self.node;
         match (tag, value) {
             (_, Content::Empty) => visitor.visit_unit(),
-            (_, Content::Seq(seq)) => visitor.visit_seq(SeqDeserializer::new(seq)),
-            (_, Content::Map(map)) => visitor.visit_map(MapDeserializer::new(map)),
+            (_, Content::Seq(seq)) => visitor.visit_seq(SeqDeserializer::new(seq, source)),
+            (_, Content::Map(map)) => visitor.visit_map(MapDeserializer::new(map, source)),
             (Tag::Standard(StandardTag::Null), Content::Scalar(_)) => visitor.visit_unit(),
             (Tag::Standard(StandardTag::Bool), Content::Scalar(scalar)) => {
                 match scalar_text(&scalar) {
@@ -289,28 +403,18 @@ impl<'de> de::Deserializer<'de> for NodeDeserializer<'de> {
         }
     }
 
-    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        let is_null = matches!(self.node.value, Content::Empty)
-            || self.node.tag == Tag::Standard(StandardTag::Null);
-        if is_null {
-            visitor.visit_none()
-        } else {
-            visitor.visit_some(self)
-        }
-    }
-
-    fn deserialize_enum<V>(
+    /// [`deserialize_enum`](de::Deserializer::deserialize_enum) proper; see
+    /// [`deserialize_any_impl`](Self::deserialize_any_impl).
+    fn deserialize_enum_impl<V>(
         self,
         _name: &'static str,
         _variants: &'static [&'static str],
         visitor: V,
-    ) -> Result<V::Value, Self::Error>
+    ) -> Result<V::Value, Error>
     where
         V: Visitor<'de>,
     {
+        let source = self.source;
         match self.node.value {
             // A bare scalar names a unit variant directly (`variant: Foo`).
             Content::Scalar(scalar) => match scalar_cow(scalar) {
@@ -333,6 +437,7 @@ impl<'de> de::Deserializer<'de> for NodeDeserializer<'de> {
                 visitor.visit_enum(EnumDeserializer {
                     variant: entry.key,
                     value: entry.value,
+                    source,
                 })
             }
             other => Err(Error::custom(format!(
@@ -340,12 +445,6 @@ impl<'de> de::Deserializer<'de> for NodeDeserializer<'de> {
                 content_kind(&other)
             ))),
         }
-    }
-
-    serde::forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct newtype_struct seq tuple
-        tuple_struct map struct identifier ignored_any
     }
 }
 
@@ -392,6 +491,7 @@ where
 struct EnumDeserializer<'de> {
     variant: Node<'de>,
     value: Node<'de>,
+    source: Option<&'de str>,
 }
 
 impl<'de> EnumAccess<'de> for EnumDeserializer<'de> {
@@ -402,25 +502,36 @@ impl<'de> EnumAccess<'de> for EnumDeserializer<'de> {
     where
         S: DeserializeSeed<'de>,
     {
-        let variant = seed.deserialize(NodeDeserializer::new(self.variant))?;
-        Ok((variant, VariantDeserializer { value: self.value }))
+        let variant = seed.deserialize(node_deserializer(self.variant, self.source))?;
+        Ok((
+            variant,
+            VariantDeserializer {
+                value: self.value,
+                source: self.source,
+            },
+        ))
     }
 }
 
 struct VariantDeserializer<'de> {
     value: Node<'de>,
+    source: Option<&'de str>,
 }
 
 impl<'de> VariantAccess<'de> for VariantDeserializer<'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<(), Self::Error> {
+        let origin = Origin {
+            span: self.value.span(),
+            source: self.source,
+        };
         match self.value.value {
             Content::Empty => Ok(()),
-            other => Err(Error::custom(format!(
+            other => Err(origin.locate(Error::custom(format!(
                 "expected an empty value for a unit variant, found {}",
                 content_kind(&other)
-            ))),
+            )))),
         }
     }
 
@@ -428,14 +539,14 @@ impl<'de> VariantAccess<'de> for VariantDeserializer<'de> {
     where
         T: DeserializeSeed<'de>,
     {
-        seed.deserialize(NodeDeserializer::new(self.value))
+        seed.deserialize(node_deserializer(self.value, self.source))
     }
 
     fn tuple_variant<V>(self, _len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        de::Deserializer::deserialize_seq(NodeDeserializer::new(self.value), visitor)
+        de::Deserializer::deserialize_seq(node_deserializer(self.value, self.source), visitor)
     }
 
     fn struct_variant<V>(
@@ -446,19 +557,30 @@ impl<'de> VariantAccess<'de> for VariantDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        de::Deserializer::deserialize_map(NodeDeserializer::new(self.value), visitor)
+        de::Deserializer::deserialize_map(node_deserializer(self.value, self.source), visitor)
+    }
+}
+
+/// Builds the deserializer for a nested node, carrying the source down so it can locate its own
+/// errors (see [`Origin`]).
+fn node_deserializer<'de>(node: Node<'de>, source: Option<&'de str>) -> NodeDeserializer<'de> {
+    match source {
+        Some(source) => NodeDeserializer::with_source(node, source),
+        None => NodeDeserializer::new(node),
     }
 }
 
 /// [`SeqAccess`] over an owned `Vec<Node>`.
 struct SeqDeserializer<'de> {
     iter: std::vec::IntoIter<Node<'de>>,
+    source: Option<&'de str>,
 }
 
 impl<'de> SeqDeserializer<'de> {
-    fn new(seq: Vec<Node<'de>>) -> Self {
+    fn new(seq: Vec<Node<'de>>, source: Option<&'de str>) -> Self {
         Self {
             iter: seq.into_iter(),
+            source,
         }
     }
 }
@@ -471,7 +593,9 @@ impl<'de> SeqAccess<'de> for SeqDeserializer<'de> {
         T: DeserializeSeed<'de>,
     {
         match self.iter.next() {
-            Some(node) => seed.deserialize(NodeDeserializer::new(node)).map(Some),
+            Some(node) => seed
+                .deserialize(node_deserializer(node, self.source))
+                .map(Some),
             None => Ok(None),
         }
     }
@@ -485,13 +609,15 @@ impl<'de> SeqAccess<'de> for SeqDeserializer<'de> {
 struct MapDeserializer<'de> {
     iter: std::vec::IntoIter<MapEntry<'de>>,
     value: Option<Node<'de>>,
+    source: Option<&'de str>,
 }
 
 impl<'de> MapDeserializer<'de> {
-    fn new(mapping: Mapping<'de>) -> Self {
+    fn new(mapping: Mapping<'de>, source: Option<&'de str>) -> Self {
         Self {
             iter: mapping.0.into_iter(),
             value: None,
+            source,
         }
     }
 }
@@ -506,7 +632,8 @@ impl<'de> MapAccess<'de> for MapDeserializer<'de> {
         match self.iter.next() {
             Some(entry) => {
                 self.value = Some(entry.value);
-                seed.deserialize(NodeDeserializer::new(entry.key)).map(Some)
+                seed.deserialize(node_deserializer(entry.key, self.source))
+                    .map(Some)
             }
             None => Ok(None),
         }
@@ -520,7 +647,7 @@ impl<'de> MapAccess<'de> for MapDeserializer<'de> {
             .value
             .take()
             .expect("MapAccess::next_value_seed called without a preceding next_key_seed");
-        seed.deserialize(NodeDeserializer::new(value))
+        seed.deserialize(node_deserializer(value, self.source))
     }
 
     fn size_hint(&self) -> Option<usize> {
@@ -596,7 +723,7 @@ mod tests {
     fn stream_deserializer_surfaces_per_document_errors() {
         let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\nnope\n").into_iter::<Point>();
         assert_eq!(stream.next().unwrap().unwrap(), Point { x: 1, y: 2 });
-        assert!(matches!(stream.next().unwrap(), Err(Error::Custom(_))));
+        assert!(matches!(stream.next().unwrap(), Err(Error::Custom { .. })));
         assert!(stream.next().is_none());
     }
 
@@ -678,6 +805,53 @@ mod tests {
     #[test]
     fn reports_type_mismatch_as_custom_error() {
         let err = from_str::<i64>("not a number\n").unwrap_err();
-        assert!(matches!(err, Error::Custom(_)));
+        assert!(matches!(err, Error::Custom { .. }));
+    }
+
+    /// A failure inside a nested value points at *that* value, not at the whole document: the
+    /// innermost deserializer still running attaches its node's span first.
+    #[test]
+    fn locates_a_type_mismatch_at_the_offending_node() {
+        let err = from_str::<Point>("x: 1\ny: nope\n").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("y: nope"), "{rendered}");
+        assert!(rendered.contains("2 |"), "{rendered}");
+    }
+
+    /// serde raises this one from the visitor, with no node of its own -- it lands on the mapping
+    /// that was missing the field.
+    #[test]
+    fn locates_a_missing_field_at_the_mapping() {
+        let err = from_str::<Point>("x: 1\n").unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("missing field `y`"), "{rendered}");
+        assert!(rendered.contains("x: 1"), "{rendered}");
+    }
+
+    /// One of the three exact-output tests -- see `crate::error`'s own for the rationale.
+    #[test]
+    fn deserialize_error_renders_the_offending_source() {
+        let err = from_str::<Point>("x: 1\ny: nope\n").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "\
+error: invalid type: string \"nope\", expected i64
+  |
+2 | y: nope
+  |    ^^^^"
+        );
+    }
+
+    /// Without a source there is nothing to render an excerpt against, so the message stands
+    /// alone -- the node still knows its span, but a `Node` alone doesn't carry the text.
+    #[test]
+    fn node_deserializer_without_a_source_reports_an_unlocated_error() {
+        let node = crate::parse_document("nope\n").unwrap().into_node();
+        assert!(node.span().is_some());
+        let err = i64::deserialize(NodeDeserializer::new(node)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "invalid type: string \"nope\", expected i64"
+        );
     }
 }

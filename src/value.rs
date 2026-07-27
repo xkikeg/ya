@@ -61,25 +61,114 @@ impl<'i> Document<'i> {
     }
 }
 
+/// A byte range in the input a node was parsed from.
+///
+/// Offsets are byte offsets into the complete input (the `&str` handed to [`crate::parse_document`]
+/// / [`crate::parse_stream`]), so `&input[span.range()]` is the node's own source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    start: usize,
+    end: usize,
+}
+
+impl Span {
+    /// Constructs a span covering `start..end`.
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    /// The byte offset the span starts at.
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    /// The byte offset one past the span's last byte.
+    pub fn end(&self) -> usize {
+        self.end
+    }
+
+    /// The span as a [`Range`](std::ops::Range), for slicing the input.
+    pub fn range(&self) -> std::ops::Range<usize> {
+        self.start..self.end
+    }
+
+    /// The span's length in bytes.
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Whether the span covers no bytes at all, as an empty node's does.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl From<std::ops::Range<usize>> for Span {
+    fn from(range: std::ops::Range<usize>) -> Self {
+        Self::new(range.start, range.end)
+    }
+}
+
 /// Represents a YAML node, essentially value + properties.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Nodes produced by the parser also carry the [`Span`] they were parsed from (see
+/// [`span`](Self::span)); ones built by hand don't, unless [`with_span`](Self::with_span) is used.
+#[derive(Debug, Clone)]
 pub struct Node<'i> {
     pub value: Content<'i>,
     pub tag: Tag<'i>,
+    /// Not public: parser-assigned metadata about *where* the node was written, rather than part
+    /// of the representation itself -- which is also why it takes no part in [`PartialEq`].
+    span: Option<Span>,
+}
+
+/// Equality is over the representation -- content and tag -- and deliberately ignores
+/// [`Node::span`]: two nodes are equal when they *mean* the same thing, regardless of where (or
+/// whether) they were written in some source text. Without this, every hand-built expected node in
+/// a test would have to reproduce the parser's exact byte offsets to compare equal to a parsed one.
+impl PartialEq for Node<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value && self.tag == other.tag
+    }
 }
 
 impl<'i> Node<'i> {
-    /// Constructs a node with the tag.
+    /// Constructs a node with the tag, and no span.
     pub fn new(value: Content<'i>, tag: Tag<'i>) -> Self {
-        Self { value, tag }
+        Self {
+            value,
+            tag,
+            span: None,
+        }
     }
 
-    /// Constructs a node without properties.
+    /// Constructs a node without properties, and no span.
     pub fn unspecified(value: Content<'i>) -> Self {
         Self {
             value,
             tag: Tag::Unspecified,
+            span: None,
         }
+    }
+
+    /// Returns this node with `span` recorded as the input range it was parsed from.
+    pub fn with_span(mut self, span: Span) -> Self {
+        self.span = Some(span);
+        self
+    }
+
+    /// The range of the input this node was parsed from, if it came from the parser (see
+    /// [`Span`]). Errors that name a node -- [`crate::resolve::ResolveError`], and with the `serde`
+    /// feature a failed `Deserialize` -- use this to point at the offending source text.
+    pub fn span(&self) -> Option<Span> {
+        self.span
+    }
+
+    /// Records `span` unless this node already has one, i.e. unless a more deeply nested parser
+    /// (which matched less of the input, and so is more precise) already recorded its own. See
+    /// `parse::span::spanned`.
+    pub(crate) fn set_span_if_unset(&mut self, span: Span) {
+        self.span.get_or_insert(span);
     }
 
     /// This node's scalar text, if it's a scalar (or empty) node; `None` for a sequence/mapping.
@@ -286,6 +375,28 @@ mod tests {
             Content::Scalar(Scalar::Plain(Cow::Borrowed(text))),
             Tag::Standard(tag),
         )
+    }
+
+    #[test]
+    fn span_round_trips_and_defaults_to_none() {
+        let node = tagged(StandardTag::Int, "1");
+        assert_eq!(node.span(), None);
+        assert_eq!(
+            node.with_span(Span::new(3, 4)).span(),
+            Some(Span::new(3, 4))
+        );
+    }
+
+    /// Equality is over the representation, so a hand-built expected node compares equal to a
+    /// parsed one without having to reproduce the parser's byte offsets.
+    #[test]
+    fn nodes_differing_only_in_span_are_equal() {
+        let node = tagged(StandardTag::Int, "1");
+        assert_eq!(node.clone().with_span(Span::new(0, 1)), node);
+        assert_eq!(
+            node.clone().with_span(Span::new(0, 1)),
+            node.clone().with_span(Span::new(9, 10))
+        );
     }
 
     #[test]

@@ -71,6 +71,35 @@ let points: Vec<Point> = ya::Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4
 assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
 ```
 
+## Errors
+
+Every parsed node records the byte range it came from, so errors point at the text that caused
+them and render it through [`annotate-snippets`](https://docs.rs/annotate-snippets). This holds for
+syntax errors, Core Schema tag-resolution failures, and `Deserialize` failures alike:
+
+```rust
+let err = ya::parse_document("a: 1\nb: !!int nope\n").unwrap_err();
+assert_eq!(
+    err.to_string(),
+    "\
+error: explicit tag Int does not match scalar content \"nope\"
+  |
+2 | b: !!int nope
+  |    ^^^^^^^^^^",
+);
+```
+
+```text
+error: invalid type: string "nope", expected i64
+  |
+2 | y: nope
+  |    ^^^^
+```
+
+`ya::Error` is `'static`, so it propagates into `anyhow::Error`, `Box<dyn std::error::Error>` or
+your own error enum with `?`. The position itself is available programmatically too, via
+`ya::Span` on the node and `ya::Excerpt` on the error.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).

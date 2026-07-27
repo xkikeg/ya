@@ -9,10 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.4.0] - 2026-07-27
 
 Aligns the public API with
-[serde's data format conventions](https://serde.rs/conventions.html), and makes parsing lazy at
-document granularity.
+[serde's data format conventions](https://serde.rs/conventions.html), makes parsing lazy at
+document granularity, and gives every error a source position.
 
 ### Breaking
+
+- **MSRV is now 1.85.0** (was 1.70.0), and `annotate-snippets` joins `winnow` as a second
+  dependency. Both follow from rendering diagnostics with `annotate-snippets`, which is edition
+  2024. `ya` stays otherwise dependency-free.
+- `value::Node` carries the `ya::Span` it was parsed from. Its `PartialEq` deliberately **ignores**
+  the span -- two nodes are equal when they mean the same thing, regardless of where they were
+  written -- so a hand-built node still compares equal to a parsed one. `Node::new`/`unspecified`
+  are unchanged (they produce spanless nodes); the span is read with `Node::span()` and set with
+  `Node::with_span()`.
+- `resolve::ResolveError` is a struct rather than an enum: its two former variants moved to
+  `resolve::ResolveErrorKind`, behind `ResolveError::kind()`, and it now also carries the span (and,
+  once located, the source) of the offending node.
+- `Error::Custom` (the `serde`-gated variant) is now a struct variant, `Custom { message, excerpt }`.
+- Error `Display` output is now rendered by `annotate-snippets` rather than hand-formatted, so it
+  reads like a compiler diagnostic. `OwnedParseError`'s `message`/`offset`/`line`/`column`/
+  `line_text` accessors are unchanged.
 
 - `ya::parse` is replaced by `ya::parse_document` (a single document, the common case) and
   `ya::parse_stream` (a lazy iterator over a `---`-separated stream). `parse_stream` returns the
@@ -32,6 +48,20 @@ document granularity.
 
 ### Added
 
+- **Source positions on everything.** The parser records the input range of every node it produces
+  (`ya::Span`), and errors raised against a node point at the text it was written as -- Core Schema
+  tag-resolution failures and, with the `serde` feature, `Deserialize` failures, not just syntax
+  errors. Diagnostics are rendered through
+  [`annotate-snippets`](https://docs.rs/annotate-snippets) with its plain (uncoloured) renderer,
+  since a library caller has no terminal context.
+- `ya::Span`, the byte range a node was parsed from, with `Node::span()`/`Node::with_span()`.
+- `ya::Excerpt`, the source an error points at: the lines its span covers, plus line/column. On
+  `OwnedParseError::excerpt()` and `ResolveError::excerpt()`.
+- `resolve::ResolveError::span()`, and `located(source)` for callers driving `resolve()` themselves
+  (`parse_document`/`parse_stream` call it for you -- they have the input, `resolve()` doesn't).
+- `de::NodeDeserializer::with_source`, so a deserializer built from a bare `Node` can locate its
+  errors too. Everything reached through `from_str`/`from_bytes`/`Deserializer` does this already.
+- `Documents::source()`, the complete input being iterated.
 - `ya::parse_stream` and `ya::Documents`: documents are parsed and tag-resolved one at a time as the
   iterator is advanced, so a multi-document stream costs only its largest single document in peak
   memory and a syntax error in the first document surfaces without parsing the rest.

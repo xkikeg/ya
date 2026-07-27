@@ -12,6 +12,7 @@ use crate::{
         input::InputStream,
         properties,
         spaces::{self, IndentLevel},
+        span::spanned,
     },
     value::{Content, Node},
 };
@@ -31,13 +32,18 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "block::node::block_node",
-        alt((
-            block_in_block(context, indent_level),
-            flow_in_block(indent_level),
-        )),
-    )
+    // `spanned` here is a backstop rather than the precise source: both arms bottom out in
+    // parsers that record their own (narrower) span, and set-if-unset keeps those. It only takes
+    // effect if some path ever produces a node nothing else spanned.
+    trace("block::node::block_node", move |input: &mut Input| {
+        spanned(
+            input,
+            alt((
+                block_in_block(context, indent_level),
+                flow_in_block(indent_level),
+            )),
+        )
+    })
 }
 
 /// Block in block node.
@@ -108,45 +114,47 @@ where
     Error: ParserError<Input>,
 {
     trace("block::node::block_collection", move |input: &mut Input| {
-        let start = input.checkpoint();
-        let props = alt((
-            delimited(
-                spaces::separate(context, indent_level + 1),
-                properties::properties(context, indent_level + 1),
-                spaces::line_comments,
-            )
-            .map(Some),
-            delimited(
-                spaces::separate(context, indent_level + 1),
-                properties::tag_property.map(|tag| properties::Properties {
-                    anchor: None,
-                    tag: Some(tag),
-                }),
-                spaces::line_comments,
-            )
-            .map(Some),
-            delimited(
-                spaces::separate(context, indent_level + 1),
-                properties::anchor_property.map(|anchor| properties::Properties {
-                    anchor: Some(anchor),
-                    tag: None,
-                }),
-                spaces::line_comments,
-            )
-            .map(Some),
-            spaces::line_comments.value(None),
-        ))
-        .parse_next(input)?;
-        let content = alt((
-            seq::block_sequence(Context::seq_space(indent_level)).map(Content::Seq),
-            map::block_mapping(indent_level).map(Content::Map),
-        ))
-        .parse_next(input)?;
-        let (anchor, tag) = match props {
-            Some(properties::Properties { anchor, tag }) => (anchor, tag),
-            None => (None, None),
-        };
-        properties::build_node(input, &start, anchor, tag, content)
+        spanned(input, move |input: &mut Input| {
+            let start = input.checkpoint();
+            let props = alt((
+                delimited(
+                    spaces::separate(context, indent_level + 1),
+                    properties::properties(context, indent_level + 1),
+                    spaces::line_comments,
+                )
+                .map(Some),
+                delimited(
+                    spaces::separate(context, indent_level + 1),
+                    properties::tag_property.map(|tag| properties::Properties {
+                        anchor: None,
+                        tag: Some(tag),
+                    }),
+                    spaces::line_comments,
+                )
+                .map(Some),
+                delimited(
+                    spaces::separate(context, indent_level + 1),
+                    properties::anchor_property.map(|anchor| properties::Properties {
+                        anchor: Some(anchor),
+                        tag: None,
+                    }),
+                    spaces::line_comments,
+                )
+                .map(Some),
+                spaces::line_comments.value(None),
+            ))
+            .parse_next(input)?;
+            let content = alt((
+                seq::block_sequence(Context::seq_space(indent_level)).map(Content::Seq),
+                map::block_mapping(indent_level).map(Content::Map),
+            ))
+            .parse_next(input)?;
+            let (anchor, tag) = match props {
+                Some(properties::Properties { anchor, tag }) => (anchor, tag),
+                None => (None, None),
+            };
+            properties::build_node(input, &start, anchor, tag, content)
+        })
     })
 }
 
@@ -180,10 +188,9 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "block::node::e_node",
-        empty.value(Node::unspecified(Content::Empty)),
-    )
+    trace("block::node::e_node", |input: &mut Input| {
+        spanned(input, empty.value(Node::unspecified(Content::Empty)))
+    })
     .parse_next(input)
 }
 
@@ -232,12 +239,16 @@ where
     trace("block::node::compact_notation", move |input: &mut Input| {
         let m = take_while(0.., b' ').parse_next(input)?.len();
         let indent_level = indent_level + (m + 1);
-        alt((
-            seq::compact_sequence(indent_level)
-                .map(|entries| Node::unspecified(Content::Seq(entries))),
-            map::compact_mapping(indent_level)
-                .map(|mapping| Node::unspecified(Content::Map(mapping))),
-        ))
-        .parse_next(input)
+        // Spanned *after* the `m` leading spaces, so the collection's span starts at its first
+        // entry rather than at the whitespace separating it from the `-`/key that introduced it.
+        spanned(
+            input,
+            alt((
+                seq::compact_sequence(indent_level)
+                    .map(|entries| Node::unspecified(Content::Seq(entries))),
+                map::compact_mapping(indent_level)
+                    .map(|mapping| Node::unspecified(Content::Map(mapping))),
+            )),
+        )
     })
 }

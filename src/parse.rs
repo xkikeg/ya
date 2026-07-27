@@ -19,6 +19,7 @@ mod properties;
 pub mod scalar;
 mod single;
 pub mod spaces;
+mod span;
 mod tag_handles;
 
 #[cfg(test)]

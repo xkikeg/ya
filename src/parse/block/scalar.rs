@@ -10,6 +10,7 @@ use crate::{
         input::InputStream,
         properties,
         spaces::{self, IndentLevel},
+        span::spanned,
     },
     value::{Content, Node, Scalar},
 };
@@ -31,23 +32,27 @@ where
 {
     trace("block::scalar::block_scalar", move |input: &mut Input| {
         spaces::separate(context, indent_level + 1).parse_next(input)?;
-        let start = input.checkpoint();
-        let props = opt((
-            properties::properties(context, indent_level + 1),
-            spaces::separate(context, indent_level + 1),
-        ))
-        .parse_next(input)?
-        .map(|(props, ())| props);
-        let scalar = alt((
-            literal::literal(indent_level).map(Scalar::Literal),
-            folded::folded(indent_level).map(Scalar::Folded),
-        ))
-        .parse_next(input)?;
-        let (anchor, tag) = match props {
-            Some(properties::Properties { anchor, tag }) => (anchor, tag),
-            None => (None, None),
-        };
-        properties::build_node(input, &start, anchor, tag, Content::Scalar(scalar))
+        // Spanned from here rather than around the whole closure, so the leading `s-separate` --
+        // which belongs to whatever introduced this scalar, not to the scalar -- stays outside.
+        spanned(input, move |input: &mut Input| {
+            let start = input.checkpoint();
+            let props = opt((
+                properties::properties(context, indent_level + 1),
+                spaces::separate(context, indent_level + 1),
+            ))
+            .parse_next(input)?
+            .map(|(props, ())| props);
+            let scalar = alt((
+                literal::literal(indent_level).map(Scalar::Literal),
+                folded::folded(indent_level).map(Scalar::Folded),
+            ))
+            .parse_next(input)?;
+            let (anchor, tag) = match props {
+                Some(properties::Properties { anchor, tag }) => (anchor, tag),
+                None => (None, None),
+            };
+            properties::build_node(input, &start, anchor, tag, Content::Scalar(scalar))
+        })
     })
 }
 

@@ -36,9 +36,11 @@ Consequences of this design for how you should work here:
 src/
   lib.rs             re-exports `parse`, `resolve`, `value`, the error types and the two
                         top-level entry points (`parse_document` / `parse_stream`)
-  value.rs            output data model (Stream, Document, Node, Content, Scalar, Mapping, Tag)
-                        + Construct-phase accessors (Node::is_null/as_bool/as_str/as_i64/as_f64)
-  error.rs            `Error` / `Result` / `ParseError<'i>` / `OwnedParseError`
+  value.rs            output data model (Stream, Document, Node, Content, Scalar, Mapping, Tag,
+                        Span) + Construct-phase accessors
+                        (Node::is_null/as_bool/as_str/as_i64/as_f64)
+  error.rs            `Error` / `Result` / `ParseError<'i>` / `OwnedParseError` / `Excerpt`
+                        (the located source an error points at, rendered via annotate-snippets)
   documents.rs        lazy, document-at-a-time parsing: `Documents` iterator + `parse_stream` /
                         `parse_document`, driving `parse::document`'s stream_head/stream_step
   de.rs (serde only)  `Deserialize` support: `from_str`/`from_bytes`, `Deserializer`,
@@ -49,8 +51,10 @@ src/
                         points
   parse/
     error.rs          ParserError trait alias (winnow error bounds used throughout)
-    input.rs           InputStream trait alias + `Input` (LocatingSlice + Stateful<AnchorStore>)
-                        + `WithLimit` (bounds input length, used for the 1024-char implicit-key limit)
+    input.rs           InputStream trait alias + `Input` (LocatingSlice + Stateful<AnchorStore>,
+                        also `winnow::stream::Location` so nodes can be spanned)
+    span.rs            `spanned()`: records the input range a node parser matched onto the node
+                        it produced (not a spec production; see Phase 10)
     context.rs         YamlContext / NonKey / InOutFlow / InOutBlock / Key / InFlow / FlowOrKey traits;
                         BlockIn / BlockOut / BlockKey / FlowIn / FlowOut / FlowKey marker types
                         => this is the spec's context parameter `c`, reified as types
@@ -174,9 +178,12 @@ not missing grammar.
 - `IndentLevel` internally stores spec `n + 1` (so the spec's `n = -1` "no indent yet" becomes `0`);
   use `IndentLevel::initial()` / `IndentLevel::new(n)` / `.get()` / `.prev()` / `+ usize` rather than
   constructing the wrapped integer directly.
-- The crate depends on `winnow` 1.0 (with the `simd` feature) and nothing else -- **keep it
-  zero-dependency beyond winnow** (no `regex`, no `once_cell`; hand-write small matchers instead).
-  When bumping winnow, check for combinator signature changes first.
+- The crate depends on `winnow` 1.0 (with the `simd` feature) for parsing and `annotate-snippets`
+  for rendering diagnostics (Phase 10), and nothing else -- **keep it minimal-dependency**: no
+  `regex`, no `once_cell`, no `thiserror`; hand-write small matchers instead. Two direct
+  dependencies is the budget, and a third needs a reason as good as those two. When bumping winnow,
+  check for combinator signature changes first; `annotate-snippets` sets the crate's MSRV (1.85.0),
+  so a bump there is an MSRV decision.
 - **Recursive grammar rules must break the construction cycle with a hand-rolled closure.**
   Combinators like `preceded(a, b)` *store* their sub-parsers eagerly, so an eager cycle
   (`flow_node` → `flow_content` → `flow_sequence` → `flow_node`) would be an infinitely-sized value.
@@ -187,6 +194,17 @@ not missing grammar.
   that isn't visually obvious from the spec composition (`block_map_implicit_value` → `block_node`
   directly, never passing through `block_indented`'s own closure). **When adding a new recursive
   rule, trace the whole call graph for cycles, not just the one the grammar's shape suggests.**
+- **Don't wrap the node parsers in new combinator layers; call the wrapper from inside a closure
+  instead.** Same mechanism as the previous bullet, different symptom. The parser types here nest
+  dozens deep, so adding a combinator (e.g. `.with_span().map(...)`) at *each* level multiplies the
+  monomorphized type at every level below it: Phase 10 first landed `spanned` as an ordinary
+  combinator and `cargo build` went from seconds to **18+ CPU-minutes without finishing**, while
+  `cargo check` stayed at 2.7s -- type checking is fine, it's codegen that explodes, so a quick
+  `cargo check` will not warn you. The fix is the closure form (`parse/span.rs::spanned` takes
+  `&mut Input` plus the parser, and callers build that parser inside a
+  `move |input: &mut Input| ...` body), which keeps the wrapped parser's type out of the enclosing
+  function's `impl Parser` return type entirely. If a build suddenly takes minutes, this is the
+  first thing to suspect.
 - winnow 1.0 idioms already in use, for reference when transcribing new rules: `alt`, `dispatch!`,
   `repeat` (note: `repeat(0.., p).map(|()| ())` to pick the `()` accumulator), `opt`, `preceded` /
   `terminated` / `delimited`, `peek`, `not` (peeks; succeeds at EOF), `empty.value(x)` (for `e-node`),
@@ -1273,6 +1291,81 @@ surfaces a first-document syntax error without parsing the rest.
       (162 unit + 403 integration + 8 doctests), `cargo clippy --all-targets --all-features
       -- -D warnings` and `cargo clippy --all-targets` (no features) all clean; conformance
       unchanged at **402/402 (100.0%)** -- the real safety net for 9a's refactor.
+
+### Phase 10 -- Source spans and diagnostics ([issue #39](https://github.com/xkikeg/ya/issues/39)) -- DONE
+
+Motivation: only syntax errors knew *where* they happened. `resolve()` works off `value::Node`,
+which carried no position, so `!!int nope` said what was wrong and nothing about where; serde's
+`Error::Custom` was a bare string. Tracking each element's position makes all three kinds of error
+point at the text that caused them, rendered with `annotate-snippets` (`Renderer::plain()`, since a
+library caller has no terminal).
+
+Maintainer decisions taken up front: `annotate-snippets` as an unconditional dependency (MSRV
+1.70.0 -> **1.85.0**, and the "zero-dependency beyond winnow" rule rewritten as a
+minimal-dependency one); `Node`'s span **excluded from `PartialEq`**; serde errors located by
+threading the source text through the deserializers.
+
+- [x] **10a. `value::Span`** (byte range, `Copy`, `From<Range<usize>>`) and `Node.span:
+      Option<Span>` -- a *private* field with `span()`/`with_span()`, since it's parser-assigned
+      metadata rather than part of the representation. `Node::new`/`unspecified` keep their
+      signatures and produce spanless nodes, so every hand-built node in the tests still works.
+      `PartialEq` is hand-written over `(value, tag)` only: including the span would have forced
+      ~80 test assertions to reproduce the parser's exact byte offsets. `Document`/`Stream`/
+      `Mapping`/`MapEntry` inherit that through their derives.
+- [x] **10b. `parse/span.rs::spanned`**, plus `impl winnow::stream::Location for Input` and
+      `Location` in the `InputStream` trait alias. **This is where the phase went wrong once and is
+      worth reading before touching it**: `spanned` first landed as an ordinary combinator
+      (`parser.with_span().map(...)`), which type-checks fine (`cargo check`: 2.7s) but sent
+      `cargo build` to 18+ CPU-minutes without finishing -- two extra type layers at every level of
+      parser types that already nest dozens deep multiply the monomorphized type all the way down.
+      Rewritten to take `&mut Input` and its parser as arguments, called from inside a
+      `move |input: &mut Input| ...` closure that *builds* that parser, the build is **6 seconds**
+      (faster than before the phase, since those closures also collapse type nesting that was
+      already there). Now recorded as its own convention bullet above.
+      Semantics: set-if-unset, so the innermost (narrowest) parser wins and an outer rule's leading
+      indentation never widens a span a nested rule already pinned down.
+      Wrap sites: `flow/node.rs`'s three node rules, `block/node.rs`'s `block_node`/
+      `block_collection`/`e_node`/`compact_notation`, `block/scalar.rs::block_scalar`, and the
+      inline empty-node fallbacks in `flow/map.rs`/`flow/seq.rs`. `key.rs` needed none -- its
+      implicit keys delegate to flow nodes, which span themselves. `alias.rs::alias_node`
+      *overwrites* rather than set-if-unset: the anchored node is substituted eagerly, so its
+      children keep the spans from where the anchor was defined, but the node itself must point at
+      the `*name` that was actually written here.
+- [x] **10c. `error::Excerpt`**: the source lines a span covers, the position within them, and the
+      span rebased onto that text for rendering. Only the covered lines are stored, not the whole
+      input (okane's `ParseError` keeps the whole remaining input); `annotate-snippets` renders
+      identically given a rebased span, and an error stays cheap to propagate. It's boxed
+      internally -- ~70 bytes inside an `Error` that every `crate::Result` carries tripped
+      `clippy::result_large_err`, which the MSRV bump also made newly visible (as did
+      `unnecessary_map_or`, fixed in `resolve.rs`). One shared `render(f, title, excerpt)` serves
+      every located error, so they're indistinguishable in output; an empty winnow `ContextError`
+      (the trailing-input case) falls back to the title `"invalid YAML syntax"`, which also
+      settles Phase 9c's deliberately-empty message now that a title is structurally required.
+- [x] **10d. `ResolveError`** became a struct (`kind` + `span` + `excerpt`) with the old enum moved
+      to `ResolveErrorKind`; `resolve_node` stamps the offending node's span, and -- important --
+      also *carries the span across* when it rebuilds the node with the resolved tag. `located(source)`
+      turns the span into an `Excerpt`; `Documents::next` calls it (it has the input, `resolve()`
+      doesn't), and it's public for callers driving `resolve()` themselves.
+- [x] **10e. serde**: `NodeDeserializer` optionally carries the source (`with_source`), passed down
+      to the seq/map/enum accessors, and an `Origin` (span + source) attaches an excerpt to any
+      `Error::Custom` that doesn't already have one. Only-if-missing means the innermost
+      deserializer still running wins: a bad value in `{x: nope}` points at `nope`, not at the
+      mapping. `Error::Custom` is now a struct variant to hold the excerpt. `NodeDeserializer::new`
+      still works with no source; its errors just aren't located.
+- [x] **10f. Tests**: three exact-output tests, one per error shape (`error.rs`, `resolve.rs`,
+      `de.rs`) -- a mis-rebased span, an off-by-one `line_start` or a caret in the wrong column all
+      render wrong while every accessor still reports the right numbers, so only comparing the
+      rendering catches them (they will also fail on an `annotate-snippets` bump that changes
+      spacing, which is the intended prompt for a human to look). Everything else asserts
+      containment. Plus `documents.rs::every_node_spans_the_text_it_was_parsed_from` (slices each
+      node's span back out of the input -- the test that proves spans are *right*, not merely
+      present) and `an_alias_spans_the_alias_not_the_anchor`. Conformance unchanged at **402/402
+      (100.0%)**; `cargo clippy --all-targets --all-features -- -D warnings` and the no-features
+      run both clean.
+
+Deliberately **not** done: enriching the grammar with `StrContext` labels so winnow's own messages
+get more specific. That's a conformance-risky sweep across every parser and orthogonal to this
+phase, which was about position and rendering. Worth its own issue if messages still read thin.
 
 ### Open design questions (escalate to the maintainer)
 
