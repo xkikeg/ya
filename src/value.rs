@@ -10,6 +10,30 @@ impl<'i> Stream<'i> {
     pub fn documents(&self) -> &[Document<'i>] {
         &self.0
     }
+
+    /// Consumes the stream and returns the documents it holds.
+    ///
+    /// This is what a multi-document stream needs to be deserialized: [`crate::from_str`]
+    /// rejects a stream of more than one document, and the [`crate::de::NodeDeserializer`] it
+    /// defers to consumes its [`Node`], which [`documents`](Self::documents) can't hand out.
+    ///
+    /// ```
+    /// let stream = ya::parse("a: 1\n---\na: 2\n").unwrap();
+    /// let values: Vec<i64> = stream
+    ///     .into_documents()
+    ///     .into_iter()
+    ///     .map(|doc| {
+    ///         let ya::value::Content::Map(map) = doc.into_node().value else {
+    ///             panic!("expected a mapping");
+    ///         };
+    ///         map.entries()[0].value.as_i64().unwrap()
+    ///     })
+    ///     .collect();
+    /// assert_eq!(values, vec![1, 2]);
+    /// ```
+    pub fn into_documents(self) -> Vec<Document<'i>> {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
