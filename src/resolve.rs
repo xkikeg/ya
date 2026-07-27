@@ -24,7 +24,10 @@
 
 use std::borrow::Cow;
 
-use crate::value::{Content, Document, MapEntry, Mapping, Node, Scalar, StandardTag, Stream, Tag};
+use crate::error::Excerpt;
+use crate::value::{
+    Content, Document, MapEntry, Mapping, Node, Scalar, Span, StandardTag, Stream, Tag,
+};
 
 /// Resolves every node's tag in `stream` against the Core Schema, consuming it and returning the
 /// resolved stream. Scalar content is never rewritten (see the module docs); only [`Node::tag`]
@@ -52,8 +55,21 @@ pub fn resolve_document(document: Document<'_>) -> Result<Document<'_>, ResolveE
 
 /// A tag-resolution failure: an explicit standard tag was applied to content it can't legally
 /// describe.
+///
+/// Carries the [`Span`] of the offending node, when the node came from the parser (nodes built by
+/// hand have none). [`located`](Self::located) turns that span into a renderable source excerpt --
+/// [`crate::parse_document`] and [`crate::parse_stream`] do it for you, since they have the input;
+/// a caller driving [`resolve`] itself does it by hand, for the same reason.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ResolveError {
+pub struct ResolveError {
+    kind: ResolveErrorKind,
+    span: Option<Span>,
+    excerpt: Option<Excerpt>,
+}
+
+/// What went wrong, independent of where.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolveErrorKind {
     /// An explicit standard tag (`!!map`/`!!seq`/`!!str`/...) requires a node of a specific kind
     /// (mapping/sequence/scalar) that the tagged node doesn't have.
     KindMismatch {
@@ -66,10 +82,58 @@ pub enum ResolveError {
     ContentMismatch { tag: StandardTag, text: String },
 }
 
+impl ResolveError {
+    fn new(kind: ResolveErrorKind) -> Self {
+        Self {
+            kind,
+            span: None,
+            excerpt: None,
+        }
+    }
+
+    /// What went wrong.
+    pub fn kind(&self) -> &ResolveErrorKind {
+        &self.kind
+    }
+
+    /// Where it went wrong, if the offending node carried a [`Span`].
+    pub fn span(&self) -> Option<Span> {
+        self.span
+    }
+
+    /// The source this error points at, once [`located`](Self::located) has been given the input.
+    pub fn excerpt(&self) -> Option<&Excerpt> {
+        self.excerpt.as_ref()
+    }
+
+    /// Attaches the source `source` was resolved from, so [`Display`](std::fmt::Display) can show
+    /// the offending text rather than only describing it. A no-op if the error has no span.
+    pub fn located(mut self, source: &str) -> Self {
+        if let Some(span) = self.span {
+            self.excerpt = Some(Excerpt::new(source, span));
+        }
+        self
+    }
+
+    /// Records `span` unless a nested node already recorded its own (a more precise one).
+    fn at(mut self, span: Option<Span>) -> Self {
+        if self.span.is_none() {
+            self.span = span;
+        }
+        self
+    }
+}
+
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::error::render(f, &self.kind.to_string(), self.excerpt.as_ref())
+    }
+}
+
+impl std::fmt::Display for ResolveErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolveError::KindMismatch {
+            ResolveErrorKind::KindMismatch {
                 tag,
                 expected_kind,
                 actual_kind,
@@ -77,7 +141,7 @@ impl std::fmt::Display for ResolveError {
                 f,
                 "explicit tag {tag:?} requires a {expected_kind} node, but found a {actual_kind}"
             ),
-            ResolveError::ContentMismatch { tag, text } => write!(
+            ResolveErrorKind::ContentMismatch { tag, text } => write!(
                 f,
                 "explicit tag {tag:?} does not match scalar content {text:?}"
             ),
@@ -88,9 +152,17 @@ impl std::fmt::Display for ResolveError {
 impl std::error::Error for ResolveError {}
 
 fn resolve_node(node: Node<'_>) -> Result<Node<'_>, ResolveError> {
+    // Resolution rewrites the tag and rebuilds the node, so the span has to be carried across by
+    // hand -- and stamped onto any error raised against this node, which is the whole point of
+    // the parser recording it.
+    let span = node.span();
     let content = resolve_content(node.value)?;
-    let tag = resolve_tag(node.tag, &content)?;
-    Ok(Node::new(content, tag))
+    let tag = resolve_tag(node.tag, &content).map_err(|err| err.at(span))?;
+    let node = Node::new(content, tag);
+    Ok(match span {
+        Some(span) => node.with_span(span),
+        None => node,
+    })
 }
 
 fn resolve_content(content: Content<'_>) -> Result<Content<'_>, ResolveError> {
@@ -183,10 +255,10 @@ fn validate_explicit_standard(tag: StandardTag, content: &Content<'_>) -> Result
             if classify_core_schema(text) == Some(tag) {
                 Ok(())
             } else {
-                Err(ResolveError::ContentMismatch {
+                Err(ResolveError::new(ResolveErrorKind::ContentMismatch {
                     tag,
                     text: text.to_string(),
-                })
+                }))
             }
         }
     }
@@ -201,11 +273,11 @@ fn require_kind(
     if actual_kind == expected_kind {
         Ok(())
     } else {
-        Err(ResolveError::KindMismatch {
+        Err(ResolveError::new(ResolveErrorKind::KindMismatch {
             tag,
             expected_kind,
             actual_kind,
-        })
+        }))
     }
 }
 
@@ -313,7 +385,7 @@ fn is_regular_float(s: &str) -> bool {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     };
-    is_float_mantissa(mantissa) && exponent.map_or(true, is_dec_int)
+    is_float_mantissa(mantissa) && exponent.is_none_or(is_dec_int)
 }
 
 fn is_float_mantissa(s: &str) -> bool {
@@ -325,7 +397,7 @@ fn is_float_mantissa(s: &str) -> bool {
         None => (s, None),
     };
     is_digits(int_part, |c| c.is_ascii_digit())
-        && frac.map_or(true, |f| f.chars().all(|c| c.is_ascii_digit()))
+        && frac.is_none_or(|f| f.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Percent-decodes `%XX` escapes in a tag URI. Shorthand tags keep escapes raw at parse time (see
@@ -509,11 +581,11 @@ mod tests {
             Tag::Global(Cow::Borrowed("tag:yaml.org,2002:int")),
         );
         assert_eq!(
-            ResolveError::ContentMismatch {
+            &ResolveErrorKind::ContentMismatch {
                 tag: StandardTag::Int,
                 text: "foo".to_string()
             },
-            resolve_node(bad).unwrap_err()
+            resolve_node(bad).unwrap_err().kind()
         );
     }
 
@@ -524,12 +596,12 @@ mod tests {
             Tag::Global(Cow::Borrowed("tag:yaml.org,2002:map")),
         );
         assert_eq!(
-            ResolveError::KindMismatch {
+            &ResolveErrorKind::KindMismatch {
                 tag: StandardTag::Map,
                 expected_kind: "mapping",
                 actual_kind: "scalar",
             },
-            resolve_node(bad).unwrap_err()
+            resolve_node(bad).unwrap_err().kind()
         );
     }
 
@@ -556,6 +628,53 @@ mod tests {
         assert_eq!(
             Tag::Global(Cow::Owned("tag:example.com,2000:app/tag!".to_string())),
             resolve_node(node).unwrap().tag
+        );
+    }
+
+    /// The point of Phase 10: a mistagged node names the text it was written as, not just what's
+    /// wrong with it.
+    #[test]
+    fn resolve_error_carries_the_offending_node_span() {
+        let input = "a: 1\nb: !!int nope\n";
+        let err = crate::parse_document(input).unwrap_err();
+        let crate::Error::Resolve(err) = err else {
+            panic!("expected a resolution error, got {err:?}");
+        };
+        assert_eq!(
+            &input[err.span().expect("a parsed node has a span").range()],
+            "!!int nope"
+        );
+        assert_eq!(err.excerpt().unwrap().line(), 2);
+    }
+
+    /// One of the three exact-output tests -- see `crate::error`'s own for the rationale.
+    #[test]
+    fn resolve_error_renders_the_offending_source() {
+        let err = crate::parse_document("a: 1\nb: !!int nope\n").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "\
+error: explicit tag Int does not match scalar content \"nope\"
+  |
+2 | b: !!int nope
+  |    ^^^^^^^^^^"
+        );
+    }
+
+    /// A node built by hand has no span, so there is nothing to point at -- the message alone is
+    /// still a complete error.
+    #[test]
+    fn resolve_error_without_a_span_renders_its_message_alone() {
+        let node = Node::new(
+            Content::Scalar(Scalar::Plain(Cow::Borrowed("foo"))),
+            Tag::Global(Cow::Borrowed("tag:yaml.org,2002:int")),
+        );
+        let err = resolve_node(node).unwrap_err();
+        assert_eq!(err.span(), None);
+        assert_eq!(
+            err.located("irrelevant, there is no span to locate")
+                .to_string(),
+            "explicit tag Int does not match scalar content \"foo\""
         );
     }
 

@@ -10,6 +10,7 @@ use crate::{
         error::ParserError,
         input::InputStream,
         spaces::{self, IndentLevel},
+        span::spanned,
     },
     value::{Content, Mapping, Node},
 };
@@ -95,8 +96,13 @@ where
     trace(
         "flow::seq::flow_seq_entry",
         alt((
-            super::pair::flow_pair(context, indent_level)
-                .map(|e| Node::unspecified(Content::Map(Mapping(vec![e])))),
+            move |input: &mut Input| {
+                spanned(
+                    input,
+                    super::pair::flow_pair(context, indent_level)
+                        .map(|e| Node::unspecified(Content::Map(Mapping(vec![e])))),
+                )
+            },
             super::node::flow_node(context, indent_level),
         )),
     )

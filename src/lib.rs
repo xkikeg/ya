@@ -21,6 +21,23 @@
 //! };
 //! assert_eq!(map.entries()[0].value.as_str(), Some("value"));
 //! ```
+//!
+//! Every parsed node records the [`Span`] of the input it came from, so failures point at the
+//! text that caused them -- syntax errors, tag-resolution errors, and (with the `serde` feature)
+//! `Deserialize` failures alike, all rendered through
+//! [`annotate_snippets`](https://docs.rs/annotate-snippets):
+//!
+//! ```
+//! let err = ya::parse_document("a: 1\nb: !!int nope\n").unwrap_err();
+//! assert_eq!(
+//!     err.to_string(),
+//!     "\
+//! error: explicit tag Int does not match scalar content \"nope\"
+//!   |
+//! 2 | b: !!int nope
+//!   |    ^^^^^^^^^^",
+//! );
+//! ```
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -34,7 +51,8 @@ pub mod resolve;
 pub mod value;
 
 pub use documents::{parse_document, parse_stream, Documents};
-pub use error::{Error, OwnedParseError, ParseError, Result};
+pub use error::{Error, Excerpt, OwnedParseError, ParseError, Result};
+pub use value::Span;
 
 #[cfg(feature = "serde")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]

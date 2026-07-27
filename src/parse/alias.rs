@@ -4,11 +4,17 @@ use winnow::{
     Parser,
 };
 
-use crate::value::Node;
+use crate::value::{Node, Span};
 
 use super::{error::ParserError, input::InputStream, properties::anchor_name};
 
 /// Alias node.
+///
+/// The anchored node is substituted eagerly (a clone of whatever `&name` was bound to), so the
+/// resulting node's *children* keep the spans they had where the anchor was defined. Its own
+/// top-level span is overwritten with the alias's position instead, since that is where this
+/// particular node was written -- an error about it should point at the `*name`, not at the
+/// original definition somewhere else in the document.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-ns-alias-node
 #[doc(alias = "c-ns-alias-node")]
@@ -19,8 +25,11 @@ where
 {
     trace("alias::alias_node", move |input: &mut Input| {
         let start = input.checkpoint();
-        let alias = preceded(one_of('*'), anchor_name).parse_next(input)?;
-        input.anchor_store().get(alias).cloned().ok_or_else(|| {
+        let (alias, span) = preceded(one_of('*'), anchor_name)
+            .with_span()
+            .parse_next(input)?;
+        let span = Span::from(span);
+        let node = input.anchor_store().get(alias).cloned().ok_or_else(|| {
             Error::from_input(input).add_context(
                 input,
                 &start,
@@ -28,7 +37,8 @@ where
                     "previously registered anchors",
                 )),
             )
-        })
+        })?;
+        Ok(node.with_span(span))
     })
     .parse_next(input)
 }

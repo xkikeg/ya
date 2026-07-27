@@ -10,8 +10,9 @@ use crate::{
         error::ParserError,
         input::InputStream,
         spaces::{self, IndentLevel},
+        span::spanned,
     },
-    value::{Content, MapEntry, Mapping, Node},
+    value::{Content, MapEntry, Mapping, Node, Span},
 };
 
 use super::node::{flow_json_node, flow_node, flow_yaml_node};
@@ -121,9 +122,14 @@ where
         "flow::map::flow_map_explicit_entry",
         alt((
             flow_map_implicit_entry(context, indent_level),
-            empty.value(MapEntry {
-                key: Node::unspecified(Content::Empty),
-                value: Node::unspecified(Content::Empty),
+            empty.with_span().map(|((), span)| {
+                // Both nodes are empty, so both span nothing, at the position the entry would
+                // have started at.
+                let span = Span::from(span);
+                MapEntry {
+                    key: Node::unspecified(Content::Empty).with_span(span),
+                    value: Node::unspecified(Content::Empty).with_span(span),
+                }
             }),
         )),
     )
@@ -179,11 +185,16 @@ where
         "flow::map::flow_map_yaml_key_entry",
         (
             flow_yaml_node(context, indent_level),
-            opt(preceded(
-                opt(spaces::separate(context, indent_level)),
-                flow_map_separate_value(context, indent_level),
-            ))
-            .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+            move |input: &mut Input| {
+                spanned(
+                    input,
+                    opt(preceded(
+                        opt(spaces::separate(context, indent_level)),
+                        flow_map_separate_value(context, indent_level),
+                    ))
+                    .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+                )
+            },
         )
             .map(MapEntry::from_tuple),
     )
@@ -204,10 +215,13 @@ where
 {
     trace(
         "flow::map::flow_map_empty_key_entry",
-        flow_map_separate_value(context, indent_level).map(|value| MapEntry {
-            key: Node::unspecified(Content::Empty),
-            value,
-        }),
+        flow_map_separate_value(context, indent_level)
+            .with_span()
+            .map(|(value, span)| MapEntry {
+                // The absent key spans nothing, at the position the `:` was found.
+                key: Node::unspecified(Content::Empty).with_span(Span::new(span.start, span.start)),
+                value,
+            }),
     )
 }
 
@@ -231,12 +245,17 @@ where
                 ':',
                 peek(one_of(|c| !<Context as FlowOrKey>::is_plain_safe(c))),
             ),
-            opt(preceded(
-                spaces::separate(context, indent_level),
-                flow_node(context, indent_level),
-            )),
-        )
-        .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+            move |input: &mut Input| {
+                spanned(
+                    input,
+                    opt(preceded(
+                        spaces::separate(context, indent_level),
+                        flow_node(context, indent_level),
+                    ))
+                    .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+                )
+            },
+        ),
     )
 }
 
@@ -257,11 +276,16 @@ where
         "flow::map::flow_map_json_key_entry",
         (
             flow_json_node(context, indent_level),
-            opt(preceded(
-                opt(spaces::separate(context, indent_level)),
-                flow_map_adjacent_value(context, indent_level),
-            ))
-            .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+            move |input: &mut Input| {
+                spanned(
+                    input,
+                    opt(preceded(
+                        opt(spaces::separate(context, indent_level)),
+                        flow_map_adjacent_value(context, indent_level),
+                    ))
+                    .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+                )
+            },
         )
             .map(MapEntry::from_tuple),
     )
@@ -282,14 +306,16 @@ where
 {
     trace(
         "flow::map::flow_map_adjacent_value",
-        preceded(
-            ':',
-            opt(preceded(
-                opt(spaces::separate(context, indent_level)),
-                flow_node(context, indent_level),
-            )),
-        )
-        .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+        preceded(':', move |input: &mut Input| {
+            spanned(
+                input,
+                opt(preceded(
+                    opt(spaces::separate(context, indent_level)),
+                    flow_node(context, indent_level),
+                ))
+                .map(|x| x.unwrap_or(Node::unspecified(Content::Empty))),
+            )
+        }),
     )
 }
 

@@ -1,7 +1,7 @@
 //! Defines [`InputStream`] which is just a trait alias.
 
 use winnow::{
-    stream::{self, AsBStr, Compare, Stream, StreamIsPartial},
+    stream::{self, AsBStr, Compare, Location, Stream, StreamIsPartial},
     LocatingSlice, Stateful,
 };
 
@@ -14,6 +14,7 @@ pub trait InputStream<'i>:
     + StreamIsPartial
     + Compare<&'static str>
     + Compare<char>
+    + Location
     + TrackStartOfLine
     + WithAnchorStore<'i>
     + WithTagHandles<'i>
@@ -26,6 +27,7 @@ impl<'i, T> InputStream<'i> for T where
         + StreamIsPartial
         + Compare<&'static str>
         + Compare<char>
+        + Location
         + TrackStartOfLine
         + WithAnchorStore<'i>
         + WithTagHandles<'i>
@@ -123,7 +125,6 @@ pub trait TrackStartOfLine {
 
 impl<'i> TrackStartOfLine for Input<'i> {
     fn is_start_of_line(&self) -> bool {
-        use stream::Location as _;
         match self.inner.previous_token_end() {
             0 => true,
             // Given str is UTF-8, ASCII can be compared literally.
@@ -132,10 +133,22 @@ impl<'i> TrackStartOfLine for Input<'i> {
     }
 
     fn previous_char(&self) -> Option<char> {
-        use stream::Location as _;
         self.original[..self.inner.previous_token_end()]
             .chars()
             .next_back()
+    }
+}
+
+/// Byte offsets into the input, as [`winnow::Parser::with_span`] needs to hand a
+/// [`crate::value::Span`] to each parsed node. Forwarded to the inner [`LocatingSlice`], which is
+/// what actually tracks them.
+impl<'i> Location for Input<'i> {
+    fn previous_token_end(&self) -> usize {
+        self.inner.previous_token_end()
+    }
+
+    fn current_token_start(&self) -> usize {
+        self.inner.current_token_start()
     }
 }
 

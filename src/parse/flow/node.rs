@@ -3,7 +3,7 @@ use winnow::{combinator::opt, combinator::preceded, combinator::trace, Parser};
 
 use crate::parse::{
     alias::alias_node, context::FlowOrKey, error::ParserError, flow::content::flow_content,
-    input::InputStream, properties, spaces, spaces::IndentLevel,
+    input::InputStream, properties, spaces, spaces::IndentLevel, span::spanned,
 };
 use crate::value::{Content, Node};
 
@@ -22,14 +22,16 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "flow::node::flow_node",
-        alt((
-            alias_node,
-            flow_content(context, indent_level).map(Node::unspecified),
-            node_with_properties(context, indent_level, flow_content(context, indent_level)),
-        )),
-    )
+    trace("flow::node::flow_node", move |input: &mut Input| {
+        spanned(
+            input,
+            alt((
+                alias_node,
+                flow_content(context, indent_level).map(Node::unspecified),
+                node_with_properties(context, indent_level, flow_content(context, indent_level)),
+            )),
+        )
+    })
 }
 
 /// Flow YAML node.
@@ -45,18 +47,20 @@ where
     Input: InputStream<'i>,
     Error: ParserError<Input>,
 {
-    trace(
-        "flow::node::flow_yaml_node",
-        alt((
-            alias_node,
-            flow_yaml_content(context, indent_level).map(Node::unspecified),
-            node_with_properties(
-                context,
-                indent_level,
-                flow_yaml_content(context, indent_level),
-            ),
-        )),
-    )
+    trace("flow::node::flow_yaml_node", move |input: &mut Input| {
+        spanned(
+            input,
+            alt((
+                alias_node,
+                flow_yaml_content(context, indent_level).map(Node::unspecified),
+                node_with_properties(
+                    context,
+                    indent_level,
+                    flow_yaml_content(context, indent_level),
+                ),
+            )),
+        )
+    })
 }
 
 /// Flow JSON node.
@@ -73,19 +77,21 @@ where
     Error: ParserError<Input>,
 {
     trace("flow::node::flow_json_node", move |input: &mut Input| {
-        let start = input.checkpoint();
-        let props = opt((
-            properties::properties(context, indent_level),
-            spaces::separate(context, indent_level),
-        ))
-        .parse_next(input)?
-        .map(|(props, ())| props);
-        let value = flow_json_content(context, indent_level).parse_next(input)?;
-        let (anchor, tag) = match props {
-            Some(properties::Properties { anchor, tag }) => (anchor, tag),
-            None => (None, None),
-        };
-        properties::build_node(input, &start, anchor, tag, value)
+        spanned(input, move |input: &mut Input| {
+            let start = input.checkpoint();
+            let props = opt((
+                properties::properties(context, indent_level),
+                spaces::separate(context, indent_level),
+            ))
+            .parse_next(input)?
+            .map(|(props, ())| props);
+            let value = flow_json_content(context, indent_level).parse_next(input)?;
+            let (anchor, tag) = match props {
+                Some(properties::Properties { anchor, tag }) => (anchor, tag),
+                None => (None, None),
+            };
+            properties::build_node(input, &start, anchor, tag, value)
+        })
     })
 }
 
