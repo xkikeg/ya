@@ -51,7 +51,18 @@ assert_eq!(point, Point { x: 1, y: 2 });
 
 ```toml
 [dependencies]
-ya = { version = "0.3", features = ["serde"] }
+ya = { version = "0.4", features = ["serde"] }
+```
+
+For a `---`-separated multi-document stream, iterate one value per document:
+
+```rust
+let points: Vec<Point> = ya::Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
+    .unwrap()
+    .into_iter()
+    .collect::<ya::Result<_>>()
+    .unwrap();
+assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
 ```
 
 ## License

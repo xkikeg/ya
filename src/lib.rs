@@ -10,7 +10,7 @@
 //!
 //! [`parse`] is the top-level entry point for representation-level parsing plus Core Schema tag
 //! resolution; [`from_str`] (behind the optional `serde` feature) deserializes directly into a
-//! caller-supplied type.
+//! caller-supplied type, and [`Deserializer`] does the same for a multi-document stream.
 //!
 //! ```
 //! let stream = ya::parse("key: value\n").unwrap();
@@ -21,14 +21,21 @@
 //! assert_eq!(map.entries()[0].value.as_str(), Some("value"));
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 pub mod de;
+mod error;
 pub mod parse;
 pub mod resolve;
 pub mod value;
 
+pub use error::{Error, OwnedParseError, ParseError, Result};
+
 #[cfg(feature = "serde")]
-pub use de::from_str;
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+pub use de::{from_bytes, from_str, Deserializer, NodeDeserializer, StreamDeserializer};
 
 use winnow::{error::ContextError, Parser as _};
 
@@ -49,43 +56,12 @@ use winnow::{error::ContextError, Parser as _};
 /// };
 /// assert_eq!(map.entries()[0].value.as_str(), Some("value"));
 /// ```
-pub fn parse(input: &str) -> Result<value::Stream<'_>, Error<'_>> {
+pub fn parse(input: &str) -> Result<value::Stream<'_>> {
     let stream = parse::yaml_stream::<_, ContextError>
         .parse(parse::input::Input::new(input))
-        .map_err(|err| Error::Parse(Box::new(err)))?;
-    resolve::resolve(stream).map_err(Error::Resolve)
+        .map_err(|err| Error::Parse(ParseError::from(err).into_owned()))?;
+    Ok(resolve::resolve(stream)?)
 }
-
-/// Error type for [`parse`].
-#[derive(Debug)]
-pub enum Error<'i> {
-    /// The input isn't valid YAML 1.2.2 syntax.
-    // Boxed per clippy::result_large_err: `winnow::error::ParseError` embeds a whole `Input`
-    // (anchors + tag handles state), making the unboxed variant far larger than `Resolve`'s.
-    Parse(Box<winnow::error::ParseError<parse::input::Input<'i>, ContextError>>),
-    /// The input parsed, but violates Core Schema tag resolution (e.g. an explicit `!!int` tag on
-    /// text that isn't a valid integer).
-    Resolve(resolve::ResolveError),
-    /// A [`serde::Deserialize`] impl rejected the shape or content of an otherwise-valid node
-    /// (e.g. a required struct field is missing, or a custom `Deserialize` impl's own validation
-    /// failed). Only constructible via [`serde::de::Error::custom`], and only when the `serde`
-    /// feature is enabled -- see [`de`].
-    #[cfg(feature = "serde")]
-    Custom(String),
-}
-
-impl std::fmt::Display for Error<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Parse(err) => write!(f, "{err}"),
-            Error::Resolve(err) => write!(f, "{err}"),
-            #[cfg(feature = "serde")]
-            Error::Custom(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for Error<'_> {}
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +84,36 @@ mod tests {
 
     #[test]
     fn parse_reports_resolve_errors() {
-        assert!(matches!(parse("!!int foo\n").unwrap_err(), Error::Resolve(_)));
+        assert!(matches!(
+            parse("!!int foo\n").unwrap_err(),
+            Error::Resolve(_)
+        ));
+    }
+
+    /// The error must not borrow the input, so it can be propagated out of the scope that owns
+    /// the parsed `String` -- the whole point of `Error` being `'static`.
+    #[test]
+    fn error_outlives_the_parsed_input() {
+        fn load() -> std::result::Result<(), Box<dyn std::error::Error + 'static>> {
+            let owned = String::from("[a, b");
+            parse(&owned)?;
+            Ok(())
+        }
+
+        assert!(load().is_err());
+    }
+
+    #[test]
+    fn syntax_error_reports_its_position() {
+        let Error::Parse(err) = parse("a: [1, 2\nb: 3\n").unwrap_err() else {
+            panic!("expected a syntax error");
+        };
+        // The offset is winnow's: where the *top-level* parser gave up, which for this grammar is
+        // the start of the document that failed rather than the exact offending character.
+        assert_eq!(err.offset(), 0);
+        assert_eq!(err.line(), 1);
+        assert_eq!(err.column(), 1);
+        assert_eq!(err.line_text(), "a: [1, 2");
+        assert!(err.to_string().contains("a: [1, 2"));
     }
 }

@@ -1,11 +1,16 @@
 [package]
 name = "ya"
 authors = ["kikeg"]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.70.0"
 license = "Apache-2.0"
 description = "Yet Another YAML parser in pure Rust"
+
+# Document the optional `serde` feature (and label the items it gates) on docs.rs.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 winnow = { version = "1.0", features = ["simd"] }

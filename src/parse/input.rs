@@ -62,6 +62,12 @@ impl<'i> Input<'i> {
             original: from,
         }
     }
+
+    /// Returns the complete input this instance was created from, regardless of how far parsing
+    /// has advanced. Used by [`crate::ParseError`] to render a diagnostic against the source.
+    pub fn original(&self) -> &'i str {
+        self.original
+    }
 }
 
 /// Trait supporting [`AnchorStore`] access, both mutable and immutable.
