@@ -9,10 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.4.0] - 2026-07-27
 
 Aligns the public API with
-[serde's data format conventions](https://serde.rs/conventions.html).
+[serde's data format conventions](https://serde.rs/conventions.html), and makes parsing lazy at
+document granularity.
 
 ### Breaking
 
+- `ya::parse` is replaced by `ya::parse_document` (a single document, the common case) and
+  `ya::parse_stream` (a lazy iterator over a `---`-separated stream). `parse_stream` returns the
+  iterator directly rather than a `Result`: nothing is parsed until it's iterated, so failures
+  surface as `Err` items.
+- `ya::Deserializer::from_str` returns `Self` instead of `Result<Self>`, for the same reason (and
+  matching `serde_json::Deserializer::from_str`). `from_bytes` stays fallible -- the UTF-8 check is
+  real.
+- `ya::StreamDeserializer` is no longer an `ExactSizeIterator`: a lazy iterator can't know how many
+  documents follow.
 - `ya::Error` no longer has a lifetime parameter, so it can outlive the parsed input and be
   propagated into `Box<dyn std::error::Error>`, `anyhow::Error`, or any error enum. It is now
   also `Clone + PartialEq` and `#[non_exhaustive]`. `Error::Parse` carries the new
@@ -22,19 +32,31 @@ Aligns the public API with
 
 ### Added
 
+- `ya::parse_stream` and `ya::Documents`: documents are parsed and tag-resolved one at a time as the
+  iterator is advanced, so a multi-document stream costs only its largest single document in peak
+  memory and a syntax error in the first document surfaces without parsing the rest.
+  `ya::StreamDeserializer` is built on this and is now genuinely lazy. (This is laziness over
+  documents, not over input -- the source is still a `&str`.)
+- `ya::parse_document`, for the single-document case. An input with no documents (empty, or only
+  comments) reads as an implicit null document; one with more than one is `Error::MultipleDocuments`.
+- `ya::Error::MultipleDocuments`.
+- `parse::yaml_document`, the single-document parser, alongside `parse::yaml_stream` (which is
+  unchanged, and still parses a whole stream eagerly).
+- `resolve::resolve_document`, resolving one document's tags -- what `resolve` maps over a stream.
 - `ya::ParseError<'i>`, a syntax error that keeps the input (and the underlying winnow
   `ParseError`) borrowed for callers who want to inspect more than the rendered message.
   `into_owned()` converts to `OwnedParseError`; both render identically.
 - `ya::Result<T>` type alias.
 - `ya::Deserializer`, built from the input itself (`Deserializer::from_str` / `from_bytes`), plus
   `ya::StreamDeserializer` via `Deserializer::into_iter::<T>()` for multi-document streams --
-  replacing the manual `NodeDeserializer` loop `from_str`'s error used to point at.
+  replacing the manual `NodeDeserializer` loop `from_str`'s error used to point at. (Lazy, see
+  above.)
 - `ya::from_bytes`, deserializing from UTF-8 bytes (`Error::Utf8` on invalid input).
 - `impl serde::de::IntoDeserializer for value::Node`, so `node.into_deserializer()` works the way
   `serde_json::Value`'s does.
 - `ya::NodeDeserializer` is now re-exported at the crate root alongside `from_str`.
 - `value::Stream::into_documents`, handing out owned `Document`s the borrowing `documents()`
-  accessor can't (this is what `StreamDeserializer` iterates).
+  accessor can't.
 - `parse::input::Input::original`, returning the complete input regardless of parse position.
 - docs.rs now builds with all features, and feature-gated items are labelled as such.
 

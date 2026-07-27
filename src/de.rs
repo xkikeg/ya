@@ -31,8 +31,9 @@ use serde::de::{
     SeqAccess, VariantAccess, Visitor,
 };
 
+use crate::documents::{single_document, Documents};
 use crate::value::{parse_core_float, parse_core_int, parse_core_uint};
-use crate::value::{Content, Document, MapEntry, Mapping, Node, Scalar, StandardTag, Stream, Tag};
+use crate::value::{Content, MapEntry, Mapping, Node, Scalar, StandardTag, Tag};
 use crate::Error;
 
 /// Deserializes `input` as YAML into `T`.
@@ -56,7 +57,7 @@ pub fn from_str<'de, T>(input: &'de str) -> crate::Result<T>
 where
     T: Deserialize<'de>,
 {
-    T::deserialize(Deserializer::from_str(input)?)
+    T::deserialize(Deserializer::from_str(input))
 }
 
 /// Deserializes `input` as UTF-8 encoded YAML into `T`.
@@ -96,39 +97,44 @@ impl de::Error for Error {
 /// }
 ///
 /// let points: Vec<Point> = ya::Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
-///     .unwrap()
 ///     .into_iter()
 ///     .collect::<Result<_, _>>()
 ///     .unwrap();
 /// assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
 /// ```
 pub struct Deserializer<'de> {
-    stream: Stream<'de>,
+    documents: Documents<'de>,
 }
 
 impl<'de> Deserializer<'de> {
-    /// Parses `input` (representation parsing + Core Schema resolution, i.e. [`crate::parse`])
-    /// into a deserializer over the resulting stream.
+    /// Creates a deserializer over `input`.
+    ///
+    /// Infallible, because nothing is parsed yet: [`crate::parse_stream`] parses each document only
+    /// when it's asked for, so a syntax error surfaces from the deserialization itself. This is
+    /// also `serde_json::Deserializer::from_str`'s signature.
     // Not `std::str::FromStr`: that trait can't borrow from its input, which is the entire point
     // of this type. Named `from_str` to match `serde_json::Deserializer::from_str`.
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(input: &'de str) -> crate::Result<Self> {
-        Ok(Self {
-            stream: crate::parse(input)?,
-        })
+    pub fn from_str(input: &'de str) -> Self {
+        Self {
+            documents: crate::parse_stream(input),
+        }
     }
 
-    /// Like [`from_str`](Self::from_str), for UTF-8 encoded input.
+    /// Like [`from_str`](Self::from_str), for UTF-8 encoded input. Fallible only because of the
+    /// UTF-8 check.
     pub fn from_bytes(input: &'de [u8]) -> crate::Result<Self> {
-        Self::from_str(std::str::from_utf8(input).map_err(Error::Utf8)?)
+        Ok(Self::from_str(
+            std::str::from_utf8(input).map_err(Error::Utf8)?,
+        ))
     }
 
     /// Turns this into an iterator yielding one `T` per document in the stream.
     ///
-    /// Unlike `serde_json::StreamDeserializer` -- which must stream, since JSON has no document
-    /// separator -- [`crate::parse`] has already materialized every document by this point, so
-    /// this iterates over parsed documents rather than parsing lazily. The API shape matches;
-    /// the laziness doesn't.
+    /// Lazy, like `serde_json::StreamDeserializer`: each document is parsed, resolved and
+    /// deserialized when the iterator reaches it, so a stream costs only its largest single
+    /// document in peak memory. (It isn't lazy over *input* the way serde_json's is -- see
+    /// [`crate::parse_stream`] for that distinction.)
     // Not `IntoIterator`: the element type is chosen by the caller (`into_iter::<T>()`), which a
     // trait impl can't express. Same signature as `serde_json::Deserializer::into_iter`.
     #[allow(clippy::should_implement_trait)]
@@ -137,24 +143,16 @@ impl<'de> Deserializer<'de> {
         T: Deserialize<'de>,
     {
         StreamDeserializer {
-            documents: self.stream.into_documents().into_iter(),
+            documents: self.documents,
             marker: PhantomData,
         }
     }
 
     /// Reduces the stream to the single node to deserialize, per [`from_str`]'s documented rules.
     fn into_single(self) -> crate::Result<NodeDeserializer<'de>> {
-        let mut documents = self.stream.into_documents().into_iter();
-        let node = match documents.next() {
-            None => Node::new(Content::Empty, Tag::Standard(StandardTag::Null)),
-            Some(doc) => doc.into_node(),
-        };
-        if documents.next().is_some() {
-            return Err(Error::custom(
-                "expected a single YAML document, found more than one; use `Deserializer::into_iter` for a multi-document stream",
-            ));
-        }
-        Ok(NodeDeserializer::new(node))
+        Ok(NodeDeserializer::new(
+            single_document(self.documents)?.into_node(),
+        ))
     }
 }
 
@@ -194,12 +192,14 @@ impl<'de> de::Deserializer<'de> for Deserializer<'de> {
     }
 }
 
-/// An iterator over the documents of a [`Deserializer`], deserializing each into a `T`.
+/// An iterator over the documents of a [`Deserializer`], deserializing each into a `T` as it's
+/// reached.
 ///
-/// Created by [`Deserializer::into_iter`]; see there for how this differs from
-/// `serde_json::StreamDeserializer`.
+/// Created by [`Deserializer::into_iter`]. Deliberately not an [`ExactSizeIterator`]: the documents
+/// after the current one haven't been parsed yet, so their count isn't known.
+#[must_use = "`StreamDeserializer` is an iterator, and parses nothing unless consumed"]
 pub struct StreamDeserializer<'de, T> {
-    documents: std::vec::IntoIter<Document<'de>>,
+    documents: Documents<'de>,
     marker: PhantomData<T>,
 }
 
@@ -212,23 +212,11 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.documents
             .next()
-            .map(|doc| T::deserialize(NodeDeserializer::new(doc.into_node())))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.documents.len();
-        (remaining, Some(remaining))
+            .map(|doc| T::deserialize(NodeDeserializer::new(doc?.into_node())))
     }
 }
 
-impl<'de, T> ExactSizeIterator for StreamDeserializer<'de, T>
-where
-    T: Deserialize<'de>,
-{
-    fn len(&self) -> usize {
-        self.documents.len()
-    }
-}
+impl<'de, T> std::iter::FusedIterator for StreamDeserializer<'de, T> where T: Deserialize<'de> {}
 
 /// A [`serde::Deserializer`] over an owned [`Node`]. See the module docs for why it consumes
 /// rather than borrows its node.
@@ -591,44 +579,38 @@ mod tests {
         // The escape hatch `from_str`'s own error points at: one `T` per document, no manual
         // `NodeDeserializer` loop needed.
         let points: Vec<Point> = Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
-            .unwrap()
             .into_iter()
             .collect::<crate::Result<_>>()
             .unwrap();
         assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
     }
 
+    /// An empty stream has no documents at all -- unlike `from_str`, which reads one absent
+    /// document as null.
     #[test]
-    fn stream_deserializer_reports_its_document_count() {
-        let stream = Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
-            .unwrap()
-            .into_iter::<Point>();
-        assert_eq!(stream.len(), 2);
-        // An empty stream has no documents at all -- unlike `from_str`, which reads one absent
-        // document as null.
-        assert_eq!(
-            Deserializer::from_str("")
-                .unwrap()
-                .into_iter::<Point>()
-                .len(),
-            0
-        );
+    fn stream_deserializer_is_empty_for_an_empty_input() {
+        assert_eq!(Deserializer::from_str("").into_iter::<Point>().count(), 0);
     }
 
     #[test]
     fn stream_deserializer_surfaces_per_document_errors() {
-        let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\nnope\n")
-            .unwrap()
-            .into_iter::<Point>();
+        let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\nnope\n").into_iter::<Point>();
         assert_eq!(stream.next().unwrap().unwrap(), Point { x: 1, y: 2 });
         assert!(matches!(stream.next().unwrap(), Err(Error::Custom(_))));
         assert!(stream.next().is_none());
     }
 
+    /// The whole point of the lazy parse layer: the first document is deserialized without the
+    /// later, unparseable one having been looked at.
+    #[test]
+    fn stream_deserializer_yields_a_value_before_parsing_a_later_broken_document() {
+        let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\n[unclosed").into_iter::<Point>();
+        assert_eq!(stream.next().unwrap().unwrap(), Point { x: 1, y: 2 });
+    }
+
     #[test]
     fn deserializes_a_node_via_into_deserializer() {
-        let stream = crate::parse("x: 1\ny: 2\n").unwrap();
-        let node = stream.into_documents().pop().unwrap().into_node();
+        let node = crate::parse_document("x: 1\ny: 2\n").unwrap().into_node();
         assert_eq!(
             Point::deserialize(node.into_deserializer()).unwrap(),
             Point { x: 1, y: 2 }
@@ -690,7 +672,7 @@ mod tests {
     #[test]
     fn rejects_multiple_documents() {
         let err = from_str::<i64>("---\n1\n---\n2\n").unwrap_err();
-        assert!(matches!(err, Error::Custom(_)));
+        assert_eq!(err, Error::MultipleDocuments);
     }
 
     #[test]

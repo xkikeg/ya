@@ -20,6 +20,10 @@ use super::{
 
 /// Stream of documents.
 ///
+/// Composed of the same two steps the lazy [`crate::Documents`] iterator drives -- [`stream_head`]
+/// once, then [`stream_step`] until it reports [`StreamStep::End`] -- so that the eager and lazy
+/// paths share one transliteration of the grammar rather than two.
+///
 /// https://yaml.org/spec/1.2.2/#rule-l-yaml-stream
 #[doc(alias = "l-yaml-stream")]
 pub fn yaml_stream<'i, Input, Error>(input: &mut Input) -> winnow::Result<value::Stream<'i>, Error>
@@ -28,57 +32,135 @@ where
     Error: ParserError<Input>,
 {
     trace("document::yaml_stream", move |input: &mut Input| {
-        document_prefix.parse_next(input)?;
-        let initial = opt(preceded(reset_document_state::<_, Error>, any_document))
-            .parse_next(input)?;
-        let mut docs: Vec<Document> = initial.into_iter().collect();
+        let mut docs: Vec<Document> = stream_head::<_, Error>(input)?.into_iter().collect();
         loop {
-            let start = input.checkpoint();
-            // Per `l-yaml-stream`, each loop iteration is *either* the `l-document-suffix+ ...
-            // l-any-document?` branch (peeked '.': one or more `...` suffixes, then any kind of
-            // document) *or* the `l-document-prefix* l-explicit-document?` branch (peeked '-':
-            // only an *explicit* document, i.e. one starting with `---`) -- never a fresh
-            // `l-directive-document` or bare document without a preceding `...` suffix. So a
-            // leading '%' here (not right after a suffix) is deliberately left to the catch-all
-            // arm, where it fails to parse as a comment and correctly ends the stream rather than
-            // being accepted as a new directive document.
-            let (next, taken) = match dispatch! {
-                peek(any);
-                '.' => preceded(
-                    (
-                        repeat(1.., document_suffix::<_, Error>).map(|()|()),
-                        repeat(0.., document_prefix.take().verify(|s: &str| !s.is_empty()).void()).map(|()|()),
-                    ),
-                    opt(preceded(reset_document_state::<_, Error>, any_document))),
-                chars::BOM => chars::BOM.value(None),
-                '-' => preceded(reset_document_state::<_, Error>, explicit_document).map(Some),
-                _ => spaces::line_comment.value(None),
-            }
-            .with_taken()
-            .parse_next(input)
-            {
-                Err(err) if err.is_backtrack() => {
-                    input.reset(&start);
-                    return Ok(docs);
-                }
-                Err(err) => return Err(err),
-                Ok(got) => got,
-            };
-            if taken.is_empty() {
-                if input.eof_offset() == 0 {
-                    return Ok(docs);
-                }
-                return Err(Error::assert(
-                    input,
-                    "stream element must consume at least one char except EOF",
-                ));
-            }
-            if let Some(n) = next {
-                docs.push(n);
+            match stream_step::<_, Error>(input)? {
+                StreamStep::Document(doc) => docs.push(doc),
+                StreamStep::Skipped => {}
+                StreamStep::End => return Ok(docs),
             }
         }
     })
     .map(value::Stream)
+    .parse_next(input)
+}
+
+/// The outcome of one iteration of [`yaml_stream`]'s loop, i.e. one element of `l-yaml-stream`'s
+/// trailing `( ... )*` group.
+pub(crate) enum StreamStep<'i> {
+    /// This iteration produced a document.
+    Document(Document<'i>),
+    /// This iteration consumed input (a BOM, a comment line, a `...` suffix) without producing a
+    /// document.
+    Skipped,
+    /// There are no further stream elements; the input position is left untouched.
+    End,
+}
+
+/// The head of [`l-yaml-stream`](yaml_stream): `l-document-prefix* l-any-document?`.
+pub(crate) fn stream_head<'i, Input, Error>(
+    input: &mut Input,
+) -> winnow::Result<Option<Document<'i>>, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "document::stream_head",
+        preceded(document_prefix, opt(any_document_reset)),
+    )
+    .parse_next(input)
+}
+
+/// One iteration of [`l-yaml-stream`](yaml_stream)'s trailing
+/// `( l-document-suffix+ l-document-prefix* l-any-document? | l-document-prefix* l-explicit-document? )*`
+/// group.
+pub(crate) fn stream_step<'i, Input, Error>(
+    input: &mut Input,
+) -> winnow::Result<StreamStep<'i>, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace("document::stream_step", move |input: &mut Input| {
+        let start = input.checkpoint();
+        // Per `l-yaml-stream`, each iteration is *either* the `l-document-suffix+ ...
+        // l-any-document?` branch (peeked '.': one or more `...` suffixes, then any kind of
+        // document) *or* the `l-document-prefix* l-explicit-document?` branch (peeked '-':
+        // only an *explicit* document, i.e. one starting with `---`) -- never a fresh
+        // `l-directive-document` or bare document without a preceding `...` suffix. So a
+        // leading '%' here (not right after a suffix) is deliberately left to the catch-all
+        // arm, where it fails to parse as a comment and correctly ends the stream rather than
+        // being accepted as a new directive document.
+        let (next, taken) = match dispatch! {
+            peek(any);
+            '.' => preceded(
+                (
+                    repeat(1.., document_suffix::<_, Error>).map(|()|()),
+                    repeat(0.., document_prefix.take().verify(|s: &str| !s.is_empty()).void()).map(|()|()),
+                ),
+                opt(any_document_reset)),
+            chars::BOM => chars::BOM.value(None),
+            '-' => preceded(reset_document_state::<_, Error>, explicit_document).map(Some),
+            _ => spaces::line_comment.value(None),
+        }
+        .with_taken()
+        .parse_next(input)
+        {
+            Err(err) if err.is_backtrack() => {
+                input.reset(&start);
+                return Ok(StreamStep::End);
+            }
+            Err(err) => return Err(err),
+            Ok(got) => got,
+        };
+        if taken.is_empty() {
+            if input.eof_offset() == 0 {
+                return Ok(StreamStep::End);
+            }
+            return Err(Error::assert(
+                input,
+                "stream element must consume at least one char except EOF",
+            ));
+        }
+        Ok(match next {
+            Some(doc) => StreamStep::Document(doc),
+            None => StreamStep::Skipped,
+        })
+    })
+    .parse_next(input)
+}
+
+/// A single document, with its surrounding `l-document-prefix*`.
+///
+/// **Not a spec production**: it's [`l-yaml-stream`](yaml_stream) restricted to exactly one
+/// document, provided because parsing a single document is the common case (see
+/// [`crate::parse_document`], which additionally rejects a stream that turns out to hold more).
+/// Named after that intent rather than after a grammar rule, since there is no rule to name it
+/// after.
+pub fn yaml_document<'i, Input, Error>(input: &mut Input) -> winnow::Result<Document<'i>, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "document::yaml_document",
+        preceded(document_prefix, any_document_reset),
+    )
+    .parse_next(input)
+}
+
+/// [`any_document`], preceded by the per-document state reset every document boundary needs (see
+/// [`reset_document_state`]).
+fn any_document_reset<'i, Input, Error>(input: &mut Input) -> winnow::Result<Document<'i>, Error>
+where
+    Input: InputStream<'i>,
+    Error: ParserError<Input>,
+{
+    trace(
+        "document::any_document_reset",
+        preceded(reset_document_state, any_document),
+    )
     .parse_next(input)
 }
 
@@ -357,6 +439,21 @@ mod tests {
 
     use crate::parse::testing;
     use crate::value::{Content, Node};
+
+    /// `yaml_document` parses one document and stops there, leaving the rest of a multi-document
+    /// stream unconsumed for the caller to deal with (which is how `crate::parse_document` knows
+    /// to reject it).
+    #[test]
+    fn single_document_stops_after_one_document() {
+        let (rest, doc) = testing::parse(yaml_document, "'foo'\n---\n'bar'\n").unwrap();
+        assert_eq!(
+            doc,
+            value::Document(Node::unspecified(Content::Scalar(
+                value::Scalar::SingleStr(Cow::Borrowed("foo"))
+            )))
+        );
+        assert_eq!(rest, "---\n'bar'\n");
+    }
 
     #[test]
     fn simple_flow_seq() {

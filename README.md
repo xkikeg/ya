@@ -25,15 +25,22 @@ implementation history and the current list of open items.
 
 ## Basic usage
 
-Parse a YAML document into a tag-resolved `value::Stream` and read it with the typed accessors:
+Parse a YAML document into a tag-resolved `value::Document` and read it with the typed accessors:
 
 ```rust
-let stream = ya::parse("key: value\n").unwrap();
-let doc = stream.documents()[0].as_node();
-let ya::value::Content::Map(map) = &doc.value else {
+let doc = ya::parse_document("key: value\n").unwrap();
+let ya::value::Content::Map(map) = &doc.as_node().value else {
     panic!("expected a mapping");
 };
 assert_eq!(map.entries()[0].value.as_str(), Some("value"));
+```
+
+`ya::parse_stream` handles a `---`-separated stream instead, parsing one document per iteration
+rather than all of them up front:
+
+```rust
+let values: ya::Result<Vec<_>> = ya::parse_stream("1\n---\n2\n").collect();
+assert_eq!(values.unwrap().len(), 2);
 ```
 
 With the optional `serde` feature enabled, deserialize directly into your own types:
@@ -58,7 +65,6 @@ For a `---`-separated multi-document stream, iterate one value per document:
 
 ```rust
 let points: Vec<Point> = ya::Deserializer::from_str("x: 1\ny: 2\n---\nx: 3\ny: 4\n")
-    .unwrap()
     .into_iter()
     .collect::<ya::Result<_>>()
     .unwrap();

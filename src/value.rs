@@ -11,15 +11,20 @@ impl<'i> Stream<'i> {
         &self.0
     }
 
-    /// Consumes the stream and returns the documents it holds.
+    /// Consumes the stream and returns the documents it holds, for callers who need owned
+    /// [`Node`]s rather than the borrows [`documents`](Self::documents) hands out.
     ///
-    /// This is what a multi-document stream needs to be deserialized: [`crate::from_str`]
-    /// rejects a stream of more than one document, and the [`crate::de::NodeDeserializer`] it
-    /// defers to consumes its [`Node`], which [`documents`](Self::documents) can't hand out.
+    /// A `Stream` comes from [`crate::parse::yaml_stream`], which parses every document up front;
+    /// [`crate::parse_stream`] yields the same documents one at a time instead.
     ///
     /// ```
-    /// let stream = ya::parse("a: 1\n---\na: 2\n").unwrap();
-    /// let values: Vec<i64> = stream
+    /// use winnow::Parser as _;
+    ///
+    /// let stream = ya::parse::yaml_stream::<_, winnow::error::ContextError>
+    ///     .parse(ya::parse::input::Input::new("a: 1\n---\na: 2\n"))
+    ///     .unwrap();
+    /// let values: Vec<i64> = ya::resolve::resolve(stream)
+    ///     .unwrap()
     ///     .into_documents()
     ///     .into_iter()
     ///     .map(|doc| {
