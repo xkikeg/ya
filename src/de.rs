@@ -415,6 +415,19 @@ mod tests {
     }
 
     #[test]
+    fn multi_document_stream_deserializes_one_document_at_a_time() {
+        // The escape hatch `from_str`'s own error points at: `from_str` rejects a stream of more
+        // than one document, so a multi-document caller drives `NodeDeserializer` itself.
+        let stream = crate::parse("x: 1\ny: 2\n---\nx: 3\ny: 4\n").unwrap();
+        let points: Vec<Point> = stream
+            .into_documents()
+            .into_iter()
+            .map(|doc| Point::deserialize(NodeDeserializer::new(doc.into_node())).unwrap())
+            .collect();
+        assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
+    }
+
+    #[test]
     fn deserializes_a_sequence() {
         assert_eq!(
             from_str::<Vec<i64>>("- 1\n- 2\n- 3\n").unwrap(),

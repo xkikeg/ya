@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Added `value::Stream::into_documents`, so a caller can deserialize a multi-document stream:
+  `from_str` rejects streams of more than one document, and the `de::NodeDeserializer` it defers
+  to consumes its `Node`, which the borrowing `documents()` accessor can't hand out.
+
 ## [0.3.0] - 2026-07-25
 
 Everything below has landed since the `0.2.0` crates.io release.
