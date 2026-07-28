@@ -1155,10 +1155,13 @@ now runs unskipped.
       names a unit variant directly, and a single-entry mapping `{Variant: value}` is externally
       tagged (unit/newtype/tuple/struct variants all handled via a small `EnumAccess`/
       `VariantAccess` pair). Errors from mismatched types or custom `Deserialize` validation
-      surface as a new `Error::Custom(String)` variant on the existing `ya::Error` from the
+      surface as a new `Error::Deserialize(String)` variant on the existing `ya::Error` from the
       top-level-API item above, itself `#[cfg(feature = "serde")]`-gated (so `ya::Error` costs
       nothing extra without the feature) and constructed only via
-      `impl serde::de::Error for Error<'_> { fn custom(...) }`. Required one more supporting
+      `impl serde::de::Error for Error<'_> { fn custom(...) }`. (This variant was called
+      `Error::Custom` -- after serde's `custom` constructor -- while Phases 8 and 10 landed, and was
+      renamed to `Error::Deserialize` afterwards, so that it names the phase that failed like every
+      other variant does. The mentions below use the current name.) Required one more supporting
       addition beyond `value.rs`'s new `parse_core_uint`: none otherwise -- `Node`/`Content`/
       `Mapping`/`MapEntry`'s existing field/accessor visibility was already sufficient for `de.rs`
       (a sibling module in the same crate) to pattern-match directly. Tests: `de.rs`'s own
@@ -1185,7 +1188,7 @@ now runs unskipped.
          owned one -- it's what every caller propagates -- and both render identically through a
          shared `render()`/`locate()` pair, so `into_owned()` loses nothing. Boxing is gone with
          the lifetime, and `Error` picked up `Clone`/`PartialEq` (impossible before) plus
-         `#[non_exhaustive]`: `Error::Custom` is `#[cfg(feature = "serde")]`, so without it a
+         `#[non_exhaustive]`: `Error::Deserialize` is `#[cfg(feature = "serde")]`, so without it a
          downstream exhaustive `match` broke merely because some *other* crate in the graph
          enabled the feature -- i.e. the feature wasn't actually additive. **Deliberately no
          `source()`** despite the plan calling for one: every variant's `Display` already contains
@@ -1303,9 +1306,9 @@ surfaces a first-document syntax error without parsing the rest.
 
 Motivation: only syntax errors knew *where* they happened. `resolve()` works off `value::Node`,
 which carried no position, so `!!int nope` said what was wrong and nothing about where; serde's
-`Error::Custom` was a bare string. Tracking each element's position makes all three kinds of error
-point at the text that caused them, rendered with `annotate-snippets` (`Renderer::plain()`, since a
-library caller has no terminal).
+`Error::Deserialize` was a bare string. Tracking each element's position makes all three kinds of
+error point at the text that caused them, rendered with `annotate-snippets` (`Renderer::plain()`,
+since a library caller has no terminal).
 
 Maintainer decisions taken up front: `annotate-snippets` as an unconditional dependency (MSRV
 1.70.0 -> **1.85.0**, and the "zero-dependency beyond winnow" rule rewritten as a
@@ -1355,10 +1358,10 @@ threading the source text through the deserializers.
       doesn't), and it's public for callers driving `resolve()` themselves.
 - [x] **10e. serde**: `NodeDeserializer` optionally carries the source (`with_source`), passed down
       to the seq/map/enum accessors, and an `Origin` (span + source) attaches an excerpt to any
-      `Error::Custom` that doesn't already have one. Only-if-missing means the innermost
+      `Error::Deserialize` that doesn't already have one. Only-if-missing means the innermost
       deserializer still running wins: a bad value in `{x: nope}` points at `nope`, not at the
-      mapping. `Error::Custom` is now a struct variant to hold the excerpt. `NodeDeserializer::new`
-      still works with no source; its errors just aren't located.
+      mapping. `Error::Deserialize` is now a struct variant to hold the excerpt.
+      `NodeDeserializer::new` still works with no source; its errors just aren't located.
 - [x] **10f. Tests**: three exact-output tests, one per error shape (`error.rs`, `resolve.rs`,
       `de.rs`) -- a mis-rebased span, an off-by-one `line_start` or a caret in the wrong column all
       render wrong while every accessor still reports the right numbers, so only comparing the

@@ -55,15 +55,16 @@ pub enum Error {
     #[cfg(feature = "serde")]
     Utf8(std::str::Utf8Error),
     /// A [`serde::Deserialize`] impl rejected the shape or content of an otherwise-valid node
-    /// (e.g. a required struct field is missing, or a custom `Deserialize` impl's own validation
-    /// failed). Constructed via [`serde::de::Error::custom`] -- see [`crate::de`].
+    /// (e.g. a required struct field is missing, or a `Deserialize` impl's own validation
+    /// failed). This is what serde's catch-all [`serde::de::Error::custom`] constructs for this
+    /// crate -- see [`crate::de`].
     ///
     /// `excerpt` points at the node being deserialized when the failure happened, whenever the
     /// deserializer knows the source text it came from (which everything reached through
     /// `from_str`/`from_bytes`/`Deserializer` does; a bare
     /// [`NodeDeserializer::new`](crate::de::NodeDeserializer::new) does not).
     #[cfg(feature = "serde")]
-    Custom {
+    Deserialize {
         message: String,
         excerpt: Option<Excerpt>,
     },
@@ -81,7 +82,7 @@ impl fmt::Display for Error {
             #[cfg(feature = "serde")]
             Error::Utf8(err) => write!(f, "{err}"),
             #[cfg(feature = "serde")]
-            Error::Custom { message, excerpt } => render(f, message, excerpt.as_ref()),
+            Error::Deserialize { message, excerpt } => render(f, message, excerpt.as_ref()),
         }
     }
 }

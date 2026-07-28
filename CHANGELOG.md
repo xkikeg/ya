@@ -25,7 +25,9 @@ document granularity, and gives every error a source position.
 - `resolve::ResolveError` is a struct rather than an enum: its two former variants moved to
   `resolve::ResolveErrorKind`, behind `ResolveError::kind()`, and it now also carries the span (and,
   once located, the source) of the offending node.
-- `Error::Custom` (the `serde`-gated variant) is now a struct variant, `Custom { message, excerpt }`.
+- `Error::Custom` (the `serde`-gated variant) is renamed and is now a struct variant,
+  `Deserialize { message, excerpt }`. `serde::de::Error::custom` is still what constructs it; the
+  variant is named for the phase that failed, like every other one.
 - Error `Display` output is now rendered by `annotate-snippets` rather than hand-formatted, so it
   reads like a compiler diagnostic. `OwnedParseError`'s `message`/`offset`/`line`/`column`/
   `line_text` accessors are unchanged.
