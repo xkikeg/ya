@@ -227,6 +227,13 @@ not missing grammar.
   `target/yaml_conformance_report.txt` after any `cargo test`) for the current pass-rate breakdown.
 - `benches/benchmark.rs` (Criterion) benchmarks `flow_sequence` only today; its own comment notes
   plain scalars aren't benchmarked yet because they're unsupported.
+- `examples/dump.rs` is a hand-rolled-argv CLI over the *public* API (no `clap`, per the
+  zero-dependency rule): it reads YAML on stdin and dumps each document's `value::Node`
+  (`--document` for a single document instead of a stream), or with `--serde` deserializes into a
+  demo type covering every construct `de.rs` supports. `cargo run --example dump -- --help` prints
+  that demo schema and a matching sample document. It deliberately has no `required-features`, so
+  a no-feature build still compiles and `--serde` fails at *runtime* with a "rebuild with
+  `--features serde`" message; the serde half is `#[cfg(feature = "serde")]`-gated inside the file.
 
 ## TODO: path to a complete parser
 
