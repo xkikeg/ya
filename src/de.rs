@@ -81,7 +81,7 @@ where
 
 impl de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
-        Error::Custom {
+        Error::Deserialize {
             message: msg.to_string(),
             excerpt: None,
         }
@@ -108,13 +108,13 @@ impl<'de> Origin<'de> {
     fn locate(self, err: Error) -> Error {
         match (err, self.span, self.source) {
             (
-                Error::Custom {
+                Error::Deserialize {
                     message,
                     excerpt: None,
                 },
                 Some(span),
                 Some(source),
-            ) => Error::Custom {
+            ) => Error::Deserialize {
                 message,
                 excerpt: Some(Excerpt::new(source, span)),
             },
@@ -723,7 +723,10 @@ mod tests {
     fn stream_deserializer_surfaces_per_document_errors() {
         let mut stream = Deserializer::from_str("x: 1\ny: 2\n---\nnope\n").into_iter::<Point>();
         assert_eq!(stream.next().unwrap().unwrap(), Point { x: 1, y: 2 });
-        assert!(matches!(stream.next().unwrap(), Err(Error::Custom { .. })));
+        assert!(matches!(
+            stream.next().unwrap(),
+            Err(Error::Deserialize { .. })
+        ));
         assert!(stream.next().is_none());
     }
 
@@ -803,9 +806,9 @@ mod tests {
     }
 
     #[test]
-    fn reports_type_mismatch_as_custom_error() {
+    fn reports_type_mismatch_as_deserialize_error() {
         let err = from_str::<i64>("not a number\n").unwrap_err();
-        assert!(matches!(err, Error::Custom { .. }));
+        assert!(matches!(err, Error::Deserialize { .. }));
     }
 
     /// A failure inside a nested value points at *that* value, not at the whole document: the
