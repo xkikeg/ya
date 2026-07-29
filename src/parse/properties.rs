@@ -229,9 +229,7 @@ where
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-ns-anchor-property
 #[doc(alias = "c-ns-anchor-property")]
-pub(super) fn anchor_property<'i, Input, Error>(
-    input: &mut Input,
-) -> winnow::Result<&'i str, Error>
+pub(super) fn anchor_property<'i, Input, Error>(input: &mut Input) -> winnow::Result<&'i str, Error>
 where
     Input: InputStream<'i>,
     Error: ParserError<Input>,

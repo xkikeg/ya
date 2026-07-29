@@ -164,8 +164,7 @@ mod tests {
     /// that last line really were newline-terminated. See `header::chomped_last`'s own comment.
     #[test]
     fn literal_clip_adds_final_break_when_source_has_none() {
-        let (rest, got) =
-            testing::parse(literal(IndentLevel::new(0)), "|\n  x\n   ").unwrap();
+        let (rest, got) = testing::parse(literal(IndentLevel::new(0)), "|\n  x\n   ").unwrap();
         assert_eq!("", rest);
         assert_eq!(Cow::<str>::Owned("x\n \n".to_string()), got);
     }

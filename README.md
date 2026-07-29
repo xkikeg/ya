@@ -73,9 +73,9 @@ assert_eq!(points, vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]);
 
 ## Errors
 
-Every parsed node records the byte range it came from, so errors point at the text that caused
-them and render it through [`annotate-snippets`](https://docs.rs/annotate-snippets). This holds for
-syntax errors, Core Schema tag-resolution failures, and `Deserialize` failures alike:
+Every parsed node records the byte range it came from, so errors are rendered with pretty
+printing (thanks to [`annotate-snippets`](https://crates.io/crates/annotate-snippets)).
+This holds for syntax errors, Core Schema tag-resolution failures, and `Deserialize` failures alike:
 
 ```rust
 let err = ya::parse_document("a: 1\nb: !!int nope\n").unwrap_err();

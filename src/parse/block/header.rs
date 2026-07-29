@@ -291,8 +291,7 @@ where
     Error: ParserError<Input>,
 {
     trace("block::header::keep_empty", move |input: &mut Input| {
-        let count: usize =
-            repeat(0.., trailing_line_empty(indent_level)).parse_next(input)?;
+        let count: usize = repeat(0.., trailing_line_empty(indent_level)).parse_next(input)?;
         opt(trail_comments(indent_level)).parse_next(input)?;
         if count > 0 {
             Ok(Cow::Owned("\n".repeat(count)))
