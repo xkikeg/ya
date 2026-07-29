@@ -144,8 +144,8 @@ Everything below has landed since the `0.2.0` crates.io release.
   unskipped in CI.
 - Added README badges/usage docs, this changelog, and a crate-level doc comment.
 
-See [`AGENT.md`](AGENT.md) for the detailed, phase-by-phase implementation history behind these
-entries.
+See [`docs/agents/history.md`](docs/agents/history.md) for the detailed, phase-by-phase
+implementation history behind these entries.
 
 ## [0.2.0] - 2025-09-08
 

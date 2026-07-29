@@ -5,8 +5,8 @@ use std::collections::HashMap;
 ///
 /// The two default handles ([`c-primary-tag-handle`](https://yaml.org/spec/1.2.2/#rule-c-primary-tag-handle)
 /// and [`c-secondary-tag-handle`](https://yaml.org/spec/1.2.2/#rule-c-secondary-tag-handle)) are
-/// always present; named handles only exist once a `%TAG` directive registers one (not
-/// implemented yet -- see AGENT.md Phase 5), so looking one up before then always misses.
+/// always present; named handles only exist once a `%TAG` directive registers one, so looking one
+/// up before its directive has been parsed always misses.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagHandles<'i>(HashMap<Cow<'i, str>, Cow<'i, str>>);
 

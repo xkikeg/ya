@@ -83,7 +83,7 @@ where
 
 /// Explicit block mapping key: `?` (not followed by a non-whitespace char, matching the spec's
 /// own annotation on `c-mapping-key` here -- otherwise it's a plain scalar starting with `?`,
-/// e.g. `?foo`, not an explicit-key marker; the same lookahead hazard Phase 0 already fixed for
+/// e.g. `?foo`, not an explicit-key marker; the same lookahead hazard guarded against in
 /// `c-l-block-seq-entry`'s `-`) followed by an indented node.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-l-block-map-explicit-key

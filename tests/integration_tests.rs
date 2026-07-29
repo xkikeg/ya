@@ -17,7 +17,7 @@
 //! doesn't retain anchor names on its own [`ya::value::Node`] yet.
 //!
 //! `ya`'s own stream is passed through [`ya::resolve::resolve`] before comparison (Core Schema
-//! tag resolution, AGENT.md Phase 6), but the *fully-resolved* tag of an *implicitly*-tagged node
+//! tag resolution), but the *fully-resolved* tag of an *implicitly*-tagged node
 //! is, like presentation and anchor names, deliberately not compared -- see `tags_match`'s doc
 //! comment for why. Only explicitly-written tags are checked exactly.
 
@@ -62,9 +62,10 @@ fn conformance_report() {
     // as the default, which would flood stderr with ~400 potential backtraces) with one that
     // stashes the formatted message -- `PanicHookInfo`'s `Display` impl includes location + the
     // panic message -- so it can be read back after `catch_unwind` reports an `Err`.
-    // TODO: this catch_unwind/panic-hook dance is a workaround for real `ya` bugs (see AGENT.md's
-    // Phase 7 notes on AVM7/HWV9); once conformance_report shows zero ParserPanic failures, rip it
-    // out and let a panic fail the test loudly again, like it does for the plain per-case rstest.
+    // TODO(#49): this catch_unwind/panic-hook dance is a workaround for real `ya` bugs (originally
+    // the empty-input panics on corpus cases AVM7/HWV9, long since fixed); ParserPanic has read
+    // zero for a while now, so this can be ripped out to let a panic fail the test loudly again,
+    // like it does for the plain per-case rstest.
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|info| {
         LAST_PANIC_MESSAGE.with(|cell| *cell.borrow_mut() = Some(info.to_string()));
@@ -498,7 +499,7 @@ fn standard_tag_uri(tag: value::StandardTag) -> &'static str {
 /// Extracts scalar content only (style is deliberately not compared, see module docs).
 ///
 /// `value::Scalar` is purely textual by design (tag resolution rewrites tags only, never
-/// content -- see AGENT.md Phase 6), so this is always the verbatim scalar text, which is exactly
+/// content), so this is always the verbatim scalar text, which is exactly
 /// what `test.event` records.
 fn scalar_value(scalar: &value::Scalar<'_>) -> String {
     match scalar {

@@ -1,7 +1,7 @@
 //! Optional [`serde::Deserialize`] support (Cargo feature `serde`), completing the Construct phase
-//! this crate's design has always deferred to it -- see AGENT.md Phase 6's design note ("typed
-//! accessors on demand ... and on top of those the Phase 8 serde `Deserialize` layer -- both parse
-//! the retained lexeme against the caller's requested type at conversion time").
+//! this crate's design has always deferred to it: [`crate::resolve`] resolves tags but leaves
+//! scalar content as written, and this layer -- like the [`Node`] accessors it sits above -- parses
+//! that retained lexeme against the caller's requested type at conversion time.
 //!
 //! There are two deserializer types, mirroring `serde_json`'s split:
 //!
@@ -17,8 +17,8 @@
 //! [`from_str`] and [`from_bytes`] are the one-shot entry points, mirroring
 //! `serde_json`/`serde_yaml`'s own.
 //!
-//! Only `Deserialize` is implemented, not `Serialize`: the tag-only resolution model (AGENT.md
-//! Phase 6) makes a `Node -> T` conversion a natural, lossy-by-design projection (an `!!int`'s
+//! Only `Deserialize` is implemented, not `Serialize`: the tag-only resolution model
+//! makes a `Node -> T` conversion a natural, lossy-by-design projection (an `!!int`'s
 //! text is parsed against whatever integer type the caller asks for), whereas `T -> Node` would
 //! need to invent presentation-layer decisions (style, quoting) this crate doesn't model at all.
 
@@ -41,8 +41,8 @@ use crate::Error;
 ///
 /// An empty stream (`input` containing zero documents, e.g. `""` or a comment-only file)
 /// deserializes as an implicit null node, matching the Core Schema's own treatment of an empty
-/// document (AGENT.md Phase 6's resolution table). A stream with more than one document is
-/// rejected -- use [`Deserializer::into_iter`] for those.
+/// document ([§10.3.2](https://yaml.org/spec/1.2.2/#1032-tag-resolution)). A stream with more than
+/// one document is rejected -- use [`Deserializer::into_iter`] for those.
 ///
 /// ```
 /// #[derive(serde::Deserialize, Debug, PartialEq)]

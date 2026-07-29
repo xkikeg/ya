@@ -105,7 +105,7 @@ mod tests {
     }
 
     /// Spec example 8.14 "Block Sequence" (the sequence value only; the enclosing mapping key
-    /// belongs to Phase 4's block-mapping tests instead).
+    /// belongs to the block-mapping tests instead).
     #[test]
     fn block_sequence_example_8_14() {
         let (rest, got) =

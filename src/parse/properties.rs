@@ -119,7 +119,7 @@ where
             // non-specific tag marker) is not a meaningful verbatim tag; it must be written as
             // bare `!` (`c-non-specific-tag`) instead. Full URI-vs-local-tag validity beyond that
             // (e.g. rejecting `!<$:?>`) needs real URI-syntax validation, which is out of scope
-            // here (deferred, like the rest of tag *resolution*, to AGENT.md Phase 6).
+            // here (deferred, like the rest of tag *resolution*, to `crate::resolve`).
             .verify(|s: &&str| *s != "!")
             .map(TagProperty::Verbatim),
     )
@@ -261,8 +261,9 @@ where
 ///
 /// Returns `None` when a shorthand's handle was never declared (no default, and no matching
 /// `%TAG` directive) -- the only failure mode, which the caller must turn into a parse error.
-/// Mapping well-known `tag:yaml.org,2002:*` URIs to [`value::StandardTag`] is deferred to
-/// AGENT.md Phase 6 (Core Schema); for now every non-non-specific tag becomes `Tag::Global`.
+/// Mapping well-known `tag:yaml.org,2002:*` URIs to [`value::StandardTag`] is deferred to the
+/// Core Schema post-pass ([`crate::resolve`]); here every non-non-specific tag becomes
+/// `Tag::Global`.
 pub(super) fn resolve_tag<'i>(
     tag_handles: &TagHandles<'i>,
     prop: TagProperty<'i>,
