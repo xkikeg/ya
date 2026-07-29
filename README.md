@@ -20,8 +20,9 @@ and module-by-module layout, if you're extending the crate.
 
 100% conformant against the official
 [yaml-test-suite](https://github.com/yaml/yaml-test-suite) (pinned to tag `data-2022-01-17`),
-checked on every CI run. See [`AGENT.md`](AGENT.md) for the detailed phase-by-phase
-implementation history and the current list of open items.
+checked on every CI run. See [`AGENT.md`](AGENT.md) for the current list of open items, and
+[`docs/agents/history.md`](docs/agents/history.md) for the detailed phase-by-phase implementation
+history.
 
 ## Basic usage
 

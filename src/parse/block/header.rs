@@ -138,10 +138,10 @@ pub(super) struct DetectedIndentation {
 /// line, and `s-indent(m)` for `m=0` matches trivially (consuming zero spaces unconditionally) --
 /// so at the document root (`n=-1`), where a totally unindented sibling line is completely normal,
 /// skipping straight past the text-matching phase is the only way to avoid swallowing that
-/// sibling as if it were more scalar content. This surfaced for real once Phase 4 made block
-/// scalars reachable inside block collections (e.g. an empty `strip: >-` entry immediately
-/// followed by a sibling `clip: >` at column 0); see AGENT.md's Phase 3 history for the earlier,
-/// unbounded version of this scan.
+/// sibling as if it were more scalar content. This surfaced for real once block scalars became
+/// reachable inside block collections (e.g. an empty `strip: >-` entry immediately followed by a
+/// sibling `clip: >` at column 0); `docs/agents/history.md` has the earlier, unbounded version of
+/// this scan and why it was wrong.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-c-indentation-indicator
 #[doc(alias = "c-indentation-indicator")]
@@ -353,8 +353,8 @@ where
             spaces::break_comment,
             // `line_comment` can succeed while consuming nothing at EOF (its start-of-line /
             // `eof`-as-break escape hatches) -- same trap as `document.rs`'s `document_prefix`
-            // (see AGENT.md Phase 0); guard the same way so `repeat` doesn't trip its
-            // must-always-consume invariant.
+            // (see AGENT.md's "a `repeat` body must always consume"); guard the same way so
+            // `repeat` doesn't trip its must-always-consume invariant.
             repeat(
                 0..,
                 spaces::line_comment

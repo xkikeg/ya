@@ -1,5 +1,4 @@
-//! Tag resolution against the [Core Schema](https://yaml.org/spec/1.2.2/#103-core-schema)
-//! (AGENT.md Phase 6).
+//! Tag resolution against the [Core Schema](https://yaml.org/spec/1.2.2/#103-core-schema).
 //!
 //! [`resolve`] is a post-pass over an already-parsed [`Stream`]: it rewrites *tags only* (never
 //! scalar content, see [`Scalar`]'s own doc comment for why), turning [`Tag::Unspecified`] and
@@ -10,7 +9,7 @@
 //! resolution rewrote scalar content in place).
 //!
 //! **Deviation from the plan's literal wording**: [`Tag::NonSpecific`] (the explicit bare `!`)
-//! is *not* rewritten to `Tag::Standard` here, even though the Phase 6 design note originally
+//! is *not* rewritten to `Tag::Standard` here, even though this crate's original design note
 //! called for "`Tag::NonSpecific` -> str/map/seq by node kind". Checked against the yaml-test-suite
 //! corpus directly (cases `52DL`/`8MK2`, "Explicit Non-Specific Tag"): `test.event` records an
 //! explicitly-written `!` as the literal tag text `"!"`, not as its resolved kind
@@ -631,8 +630,8 @@ mod tests {
         );
     }
 
-    /// The point of Phase 10: a mistagged node names the text it was written as, not just what's
-    /// wrong with it.
+    /// The point of tracking spans: a mistagged node names the text it was written as, not just
+    /// what's wrong with it.
     #[test]
     fn resolve_error_carries_the_offending_node_span() {
         let input = "a: 1\nb: !!int nope\n";

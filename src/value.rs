@@ -328,7 +328,7 @@ pub enum Content<'i> {
 /// Deliberately purely textual: a scalar is its presentation style plus its content text, exactly
 /// as in the spec's representation model. Native values (null/bool/int/float) are a
 /// Construct-phase concern ([§3.1.2](https://yaml.org/spec/1.2.2/#312-construct)): tag resolution
-/// (AGENT.md Phase 6) rewrites only [`Node::tag`] to [`Tag::Standard`], never the content, and
+/// ([`crate::resolve`]) rewrites only [`Node::tag`] to [`Tag::Standard`], never the content, and
 /// typed accessors / the serde layer interpret `(tag, text)` on demand. This keeps the source
 /// lexeme recoverable (re-resolution under another schema, error messages, event-level
 /// comparison) and defers numeric-range policy to the conversion the caller actually requests.
