@@ -104,7 +104,13 @@ where
     )
 }
 
-/// Explicit block mapping value: `s-indent(n) ":" <indented node>`.
+/// Explicit block mapping value: `s-indent(n) ":" <indented node>`, where the `:` must not be
+/// followed by a non-whitespace char.
+///
+/// That lookahead is the spec's own annotation on `c-mapping-value` here, and §8.2.2's prose says
+/// why: "in block mappings the value must never be adjacent to the `:`, as this greatly reduces
+/// readability and is not required for JSON compatibility (unlike the case in flow mappings)" --
+/// so unlike [`crate::parse::flow::map`], adjacency is rejected here rather than allowed.
 ///
 /// https://yaml.org/spec/1.2.2/#rule-l-block-map-explicit-value
 #[doc(alias = "l-block-map-explicit-value")]
@@ -118,7 +124,11 @@ where
     trace(
         "block::map::block_map_explicit_value",
         preceded(
-            (spaces::indent(indent_level), ':'),
+            (
+                spaces::indent(indent_level),
+                ':',
+                not(one_of(chars::is_non_space)),
+            ),
             block_indented(BlockOut, indent_level),
         ),
     )
@@ -174,6 +184,10 @@ where
 /// breaking recursive-grammar cycles ("Recursive grammar rules must break the construction cycle
 /// with a hand-rolled closure").
 ///
+/// As in [`block_map_explicit_value`], the `:` must not be followed by a non-whitespace char (the
+/// spec's own annotation on `c-mapping-value`): a block mapping's value is never adjacent to its
+/// `:`, unlike a flow mapping's.
+///
 /// https://yaml.org/spec/1.2.2/#rule-c-l-block-map-implicit-value
 #[doc(alias = "c-l-block-map-implicit-value")]
 fn block_map_implicit_value<'i, Input, Error>(
@@ -187,7 +201,7 @@ where
         "block::map::block_map_implicit_value",
         move |input: &mut Input| {
             preceded(
-                ':',
+                (':', not(one_of(chars::is_non_space))),
                 alt((
                     node::block_node(BlockOut, indent_level),
                     terminated(node::e_node, spaces::line_comments),
@@ -286,5 +300,51 @@ mod tests {
             testing::parse(compact_mapping(IndentLevel::new(2)), "sun: yellow\n").unwrap();
         assert_eq!("", rest);
         assert_eq!(Mapping(vec![entry(plain("sun"), plain("yellow"))]), got);
+    }
+
+    /// §8.2.2: "in block mappings the value must never be adjacent to the `:`" -- so a JSON-style
+    /// key with an adjacent value, legal inside a flow mapping (`{"a":b}`), is not a block mapping
+    /// entry at all.
+    ///
+    /// Note this asserts the *contract*, not the guard: `c-mapping-value`'s lookahead is currently
+    /// belt-and-braces, because every alternative that can follow the `:` (`s-l+block-node`'s
+    /// mandatory `s-separate`, `s-l+block-collection`'s `s-l-comments`, `e-node`'s trailing
+    /// `s-l-comments`) already begins with something no non-whitespace char can match. The test
+    /// exists so that stays true: a future change making an adjacent node parseable would be
+    /// caught here rather than silently accepting input the spec forbids.
+    #[test]
+    fn implicit_value_must_not_be_adjacent_to_the_colon() {
+        assert!(testing::parse(block_mapping(IndentLevel::initial()), "\"a\":b\n").is_err());
+        // The same key/value pair with the mandatory space is a perfectly good entry.
+        let (rest, got) =
+            testing::parse(block_mapping(IndentLevel::initial()), "\"a\": b\n").unwrap();
+        assert_eq!("", rest);
+        assert_eq!(
+            Mapping(vec![entry(
+                Node::unspecified(Content::Scalar(Scalar::DoubleStr(Cow::Borrowed("a")))),
+                plain("b")
+            )]),
+            got
+        );
+    }
+
+    /// The same rule for an explicit entry's `:` line: `:b` is not a value, so the entry's value
+    /// stays empty and the `:b` line is left unconsumed (nothing else can parse it either, so a
+    /// document containing this is a syntax error).
+    ///
+    /// Driven through [`block_mapping`] rather than [`block_map_explicit_entry`] directly: the
+    /// latter, called at `IndentLevel::initial()`, never reaches its value rule at all, because at
+    /// spec `n = -1` the *key*'s own flow-out plain scalar folds the next line into itself and
+    /// yields the single scalar `a :b`. `block_mapping` pins the indent level the way a real
+    /// document does, which is the case this rule is about.
+    #[test]
+    fn explicit_value_must_not_be_adjacent_to_the_colon() {
+        let (rest, got) =
+            testing::parse(block_mapping(IndentLevel::initial()), "? a\n:b\n").unwrap();
+        assert_eq!(":b\n", rest);
+        assert_eq!(
+            Mapping(vec![entry(plain("a"), Node::unspecified(Content::Empty))]),
+            got
+        );
     }
 }
