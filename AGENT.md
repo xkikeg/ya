@@ -200,9 +200,10 @@ reasoning about the code. The recurring shapes, each with the case that taught i
    `# not followed by non-ws char`. Missing that made `-foo` / `?foo` parse as collection markers
    that swallowed the rest of the line, instead of as plain scalars. Both now guard with
    `not(one_of(chars::is_non_space))` (`block/seq.rs::block_seq_entry`,
-   `block/map.rs::block_map_explicit_key`). **Live lead**: the spec puts the identical annotation on
-   `l-block-map-explicit-value`'s and `c-l-block-map-implicit-value`'s `:`, and neither is guarded
-   today -- no corpus case exercises it, so it was left alone.
+   `block/map.rs::block_map_explicit_key`). The spec puts the identical annotation on
+   `l-block-map-explicit-value`'s and `c-l-block-map-implicit-value`'s `:`, which went unguarded
+   until #51; note the *flow* mapping `:` deliberately has no such annotation, because `{"a":b}` is
+   required for JSON compatibility. An annotation's absence is as load-bearing as its presence.
 2. **Some rules are defined in prose, not as a production.** A block scalar's auto-detected content
    indentation ([§8.1.1.1](https://yaml.org/spec/1.2.2/#8111-block-indentation-indicator)) is
    "the leading spaces of the first non-empty line" -- an *absolute* quantity. Re-deriving it as

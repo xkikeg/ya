@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A block mapping's `:` now carries the spec's `not followed by non-ws char` lookahead, on both
+  `l-block-map-explicit-value` and `c-l-block-map-implicit-value`. Adjacent values (`"a":b`) were
+  already rejected, but by the value parser failing downstream rather than by the `:` rule itself.
+  ([#52], fixes [#51])
+
 ## [0.4.0] - 2026-07-29
 
 Aligns the public API with
@@ -163,3 +170,5 @@ Initial version.
 [#44]: https://github.com/xkikeg/ya/pull/44
 [#45]: https://github.com/xkikeg/ya/pull/45
 [#46]: https://github.com/xkikeg/ya/pull/46
+[#51]: https://github.com/xkikeg/ya/issues/51
+[#52]: https://github.com/xkikeg/ya/pull/52
